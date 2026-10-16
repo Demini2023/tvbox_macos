@@ -13,6 +13,8 @@ final class PlayerController: ObservableObject {
 
     /// 当前播放线路名
     @Published var currentLine: String = ""
+    /// 当前播放站点（换集解析时需要）
+    @Published var currentSite: String = ""
 
     private var avPlayer: AVPlayer?
     private var timeObserver: Any?
@@ -21,12 +23,13 @@ final class PlayerController: ObservableObject {
     var avPlayerForUI: AVPlayer? { avPlayer }
 
     /// 直接播放一个已解析好的地址
-    func play(url: String, title: String, episodes: [Episode], index: Int, line: String) {
+    func play(url: String, title: String, episodes: [Episode], index: Int, line: String, site: String = "") {
         cleanupObserver()
         currentTitle = title
         self.episodes = episodes
         self.currentIndex = index
         currentLine = line
+        if !site.isEmpty { currentSite = site }
         errorMessage = nil
 
         guard let playURL = URL(string: url) else {
@@ -81,7 +84,7 @@ final class PlayerController: ObservableObject {
                 }
             }
             play(url: finalURL, title: "\(title) · \(ep.name)",
-                 episodes: episodes, index: index, line: line)
+                 episodes: episodes, index: index, line: line, site: site)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -98,11 +101,22 @@ final class PlayerController: ObservableObject {
         }
     }
 
-    func playNext() {
+    /// 播放下一集（必须走完整解析流程，不能直接用采集器原始地址）
+    func playNext(api: APIClient = .shared) {
         guard currentIndex + 1 < episodes.count else { return }
-        currentIndex += 1
-        play(url: episodes[currentIndex].url, title: currentTitle,
-             episodes: episodes, index: currentIndex, line: currentLine)
+        let next = currentIndex + 1
+        let ep = episodes[next]
+        let site = currentSite
+        let line = currentLine
+        // currentTitle 形如 "影片名 · 第1集"，剥掉后缀还原影片名
+        let baseTitle = currentTitle.components(separatedBy: " · ").first ?? currentTitle
+
+        Task {
+            await playEpisode(site: site, vodId: "", flag: line,
+                              title: baseTitle, episodes: episodes,
+                              index: next, line: line, api: api)
+            _ = ep
+        }
     }
 
     func stop() {
@@ -116,12 +130,6 @@ final class PlayerController: ObservableObject {
         if let timeObserver {
             NotificationCenter.default.removeObserver(timeObserver)
             self.timeObserver = nil
-        }
-    }
-
-    deinit {
-        if let timeObserver {
-            NotificationCenter.default.removeObserver(timeObserver)
         }
     }
 }

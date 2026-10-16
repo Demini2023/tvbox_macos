@@ -133,12 +133,15 @@ struct DetailView: View {
     private func play(index: Int) {
         guard let d = detail else { return }
         router.pendingVod = d.asVod
-        router.showPlayer = true
+        // 必须先填好 PlayerTarget 再打开播放页：
+        // SwiftUI 观测到 showPlayer 后同一轮事务就会构造 PlayerView，
+        // 其 onAppear 会立刻读 PlayerTarget.shared
         PlayerTarget.shared.siteKey = store.currentSiteKey
         PlayerTarget.shared.lineName = d.lineNames().indices.contains(lineIndex)
             ? d.lineNames()[lineIndex] : "线路1"
         PlayerTarget.shared.episodes = episodes
         PlayerTarget.shared.index = index
+        router.showPlayer = true
     }
 
     private func load() async {
@@ -162,6 +165,8 @@ struct DetailView: View {
 }
 
 /// 传递给播放器的目标信息
+/// 标记 @MainActor：这些字段会被 UI 层读写，Swift 6 严格并发下需要显式隔离
+@MainActor
 final class PlayerTarget {
     static let shared = PlayerTarget()
     var siteKey = ""

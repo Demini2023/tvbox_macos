@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// 播放页：AVPlayerLayer 承载 HLS，底部选集条
 struct PlayerView: View {
@@ -75,8 +76,8 @@ struct PlayerView: View {
     }
 
     private func playAt(_ index: Int) {
-        guard index >= 0, index < PlayerTarget.shared.episodes.count else { return }
         let t = PlayerTarget.shared
+        guard index >= 0, index < t.episodes.count else { return }
         Task {
             await pc.playEpisode(site: t.siteKey,
                                  vodId: "",
