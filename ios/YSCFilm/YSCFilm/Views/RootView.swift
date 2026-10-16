@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var router: AppRouter
+    @EnvironmentObject var player: PlayerController
 
     var body: some View {
         TabView {

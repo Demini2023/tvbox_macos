@@ -129,7 +129,7 @@ struct HomeView: View {
         do {
             let h = try await APIClient.shared.home(site: key)
             home = h
-            categories = h.classes?.class ?? []
+            categories = h.classes?.`class` ?? []
             if let first = categories.first {
                 selectedCategory = first.type_id
             }

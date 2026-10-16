@@ -169,18 +169,18 @@ struct HomeResponse: Codable {
     /// `class` 是 Swift 关键字，必须用 CodingKeys 映射；
     /// 且真实站点常缺失该字段或写成 null，故整层都要容错
     struct ClassList: Codable {
-        var class: [Category]
+        var `class`: [Category]
 
         enum CodingKeys: String, CodingKey {
-            case class
+            case `class`
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            class = (try c.decodeIfPresent([Category].self, forKey: .class)) ?? []
+            `class` = (try c.decodeIfPresent([Category].self, forKey: .`class`)) ?? []
         }
 
-        var isEmpty: Bool { class.isEmpty }
+        var isEmpty: Bool { `class`.isEmpty }
     }
 
     init(from decoder: Decoder) throws {

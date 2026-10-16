@@ -40,9 +40,8 @@ struct PlayerView: View {
 
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 10)], spacing: 10) {
-                            ForEach(pc.episodes) { ep in
+                            ForEach(Array(pc.episodes.enumerated()), id: \.offset) { i, ep in
                                 Button(ep.name) {
-                                    guard let i = pc.episodes.firstIndex(of: ep) else { return }
                                     playAt(i)
                                 }
                                 .font(.footnote)

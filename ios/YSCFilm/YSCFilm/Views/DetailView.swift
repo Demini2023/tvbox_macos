@@ -95,7 +95,7 @@ struct DetailView: View {
         if let v = value, v.notEmpty {
             HStack(alignment: .top) {
                 Text(label).foregroundStyle(.secondary).frame(width: 34, alignment: .leading)
-                Text(v!)
+                Text(v)
             }
         }
     }

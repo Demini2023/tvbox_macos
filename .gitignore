@@ -24,3 +24,6 @@ xcuserdata/
 .idea/
 
 # 注意：server/libs/ 是从 APK 抽取的 drpy2 采集器运行时（核心资产），必须提交，不在忽略之列
+# WorkBuddy 本地构建产物与工作区数据
+ios/YSCFilm/.build/
+ios/YSCFilm/.workbuddy/

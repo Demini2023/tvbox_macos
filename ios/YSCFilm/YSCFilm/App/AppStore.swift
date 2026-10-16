@@ -122,6 +122,7 @@ struct FavoriteItem: Codable, Identifiable, Hashable {
     var siteKey: String
     var date: Date
     var id: String { vod.vod_id + "#" + siteKey }
+    var vodId: String { vod.vod_id }
 }
 
 struct HistoryItem: Codable, Identifiable, Hashable {
@@ -129,4 +130,5 @@ struct HistoryItem: Codable, Identifiable, Hashable {
     var siteKey: String
     var date: Date
     var id: String { vod.vod_id + "#" + siteKey }
+    var vodId: String { vod.vod_id }
 }
