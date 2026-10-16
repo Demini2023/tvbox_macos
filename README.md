@@ -40,10 +40,41 @@ ysc/
         └── Views/         首页/详情/播放/搜索/收藏/历史/设置
 ```
 
+## 零、克隆仓库（macOS）
+
+```bash
+git clone git@github.com:Demini2023/tvbox_macos.git
+cd tvbox_macos
+```
+
+### Mac 首次使用需先生成 SSH key
+
+SSH 私钥**不随仓库分发**，每台机器要各配一次：
+
+```bash
+# 1. 检查是否已有公钥
+ls ~/.ssh/id_ed25519.pub 2>/dev/null || ssh-keygen -t ed25519 -C "ysc@$(hostname)" -N ""
+
+# 2. 复制公钥，贴到 https://github.com/settings/ssh_keys/new
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+GitHub 页面填法：Title 随意（如 `ysc-mac`），Key 粘贴刚复制的 `ssh-ed25519 AAAA...`，
+Authentication type 选 **Authentication key**，保存。
+
+验证（看到 `Hi Demini2023!` 就算成功）：
+
+```bash
+ssh -T git@github.com
+```
+
+> 如果报 `Host key verification failed`，先执行 `ssh-keyscan github.com >> ~/.ssh/known_hosts`。
+> 同一 GitHub 账号可挂多把公钥，Windows/Mac 各自的 key 分别添加即可。
+
 ## 一、启动后端（Mac / PC）
 
 ```bash
-cd ysc/server
+cd server
 npm install
 node server.mjs
 ```
@@ -73,7 +104,7 @@ curl -X POST http://127.0.0.1:9527/api/config/import \
 # 安装 XcodeGen（首次）
 brew install xcodegen
 
-cd ysc/ios/YSCFilm
+cd ios/YSCFilm
 xcodegen generate
 open YSCFilm.xcodeproj
 ```
