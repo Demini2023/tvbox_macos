@@ -53,6 +53,9 @@ final class AppStore: ObservableObject {
         Task { await APIClient.shared.setBaseURL(self.serverURL) }
     }
 
+    /// 配置里的全部站点（视图层站点选择器用）
+    var sites: [Site] { config?.sites ?? [] }
+
     /// 仅本服务真正能跑的站点（CSP 插件会被服务端标 supported=false）
     var usableSites: [Site] { sites.filter { $0.supported != false } }
     /// 被跳过的不可用站点数量，设置页要如实告知用户
