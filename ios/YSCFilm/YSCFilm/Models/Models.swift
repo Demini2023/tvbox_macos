@@ -19,7 +19,20 @@ struct Site: Codable, Identifiable, Hashable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        key = try c.decode(String.self, forKey: .key)
+        // key 可能是数字型 id，多仓配置里很常见，统一转成 String
+        if let s = try c.decodeIfPresent(String.self, forKey: .key) {
+            key = s
+        } else if let i = try c.decodeIfPresent(Int.self, forKey: .key) {
+            key = String(i)
+        } else if let d = try c.decodeIfPresent(Double.self, forKey: .key) {
+            key = String(Int(d))
+        } else {
+            // 无 key 的站点无法被后续接口寻址，跳过
+            throw DecodingError.keyNotFound(
+                CodingKeys.key,
+                .init(codingPath: c.codingPath, debugDescription: "站点缺少 key 字段")
+            )
+        }
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? key
         type = try c.decodeIfPresent(Int.self, forKey: .type)
         searchable = try c.decodeIfPresent(Int.self, forKey: .searchable) ?? 2
@@ -131,6 +144,16 @@ struct VodPage: Codable {
     var total: Int?
     var list: [Vod]
 
+    /// 部分源把 list 写成 null 或干脆不返回，解码时兜底为空数组
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        page = try c.decodeIfPresent(Int.self, forKey: .page)
+        pagecount = try c.decodeIfPresent(Int.self, forKey: .pagecount)
+        limit = try c.decodeIfPresent(Int.self, forKey: .limit)
+        total = try c.decodeIfPresent(Int.self, forKey: .total)
+        list = (try c.decodeIfPresent([Vod].self, forKey: .list)) ?? []
+    }
+
     var hasMore: Bool {
         guard let pagecount = pagecount, pagecount > 0 else { return true }
         return (page ?? 1) < pagecount
@@ -143,8 +166,27 @@ struct HomeResponse: Codable {
     var classes: ClassList?
     var list: VodPage?
 
+    /// `class` 是 Swift 关键字，必须用 CodingKeys 映射；
+    /// 且真实站点常缺失该字段或写成 null，故整层都要容错
     struct ClassList: Codable {
         var class: [Category]
+
+        enum CodingKeys: String, CodingKey {
+            case class
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            class = (try c.decodeIfPresent([Category].self, forKey: .class)) ?? []
+        }
+
+        var isEmpty: Bool { class.isEmpty }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        classes = try c.decodeIfPresent(ClassList.self, forKey: .classes)
+        list = try c.decodeIfPresent(VodPage.self, forKey: .list)
     }
 }
 
@@ -152,6 +194,11 @@ struct HomeResponse: Codable {
 
 struct DetailResponse: Codable {
     var list: [VodDetail]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        list = (try c.decodeIfPresent([VodDetail].self, forKey: .list)) ?? []
+    }
 }
 
 /// 详情比列表多出选集信息
@@ -169,6 +216,23 @@ struct VodDetail: Codable, Identifiable, Hashable {
     var vod_play_url: String?
 
     var id: String { vod_id }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // 所有字段兜底为空串：真实源的选集/元信息字段经常整块缺失，
+        // 一旦必填字段缺失就会让整个详情页解码失败
+        vod_id = String((try c.decodeIfPresent(Int.self, forKey: .vod_id)).map(String.init) ?? "")
+        vod_name = (try c.decodeIfPresent(String.self, forKey: .vod_name)) ?? ""
+        vod_pic = (try c.decodeIfPresent(String.self, forKey: .vod_pic)) ?? ""
+        vod_remarks = (try c.decodeIfPresent(String.self, forKey: .vod_remarks)) ?? ""
+        vod_year = (try c.decodeIfPresent(String.self, forKey: .vod_year)) ?? ""
+        vod_area = (try c.decodeIfPresent(String.self, forKey: .vod_area)) ?? ""
+        vod_actor = (try c.decodeIfPresent(String.self, forKey: .vod_actor)) ?? ""
+        vod_director = (try c.decodeIfPresent(String.self, forKey: .vod_director)) ?? ""
+        vod_content = (try c.decodeIfPresent(String.self, forKey: .vod_content)) ?? ""
+        vod_play_from = (try c.decodeIfPresent(String.self, forKey: .vod_play_from)) ?? ""
+        vod_play_url = (try c.decodeIfPresent(String.self, forKey: .vod_play_url)) ?? ""
+    }
 
     var asVod: Vod {
         Vod(
@@ -235,6 +299,17 @@ struct ServerConfig: Codable {
     var parses: [ParseItem]?
     var flags: [FlagItem]?
     var lives: [LivesItem]?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        spider = try c.decodeIfPresent(String.self, forKey: .spider)
+        wallpaper = try c.decodeIfPresent(String.self, forKey: .wallpaper)
+        // 站点列表可能为 null 或缺失；单个站点解码失败也不该让整包挂掉
+        sites = (try? c.decode([Site].self, forKey: .sites)) ?? []
+        parses = try c.decodeIfPresent([ParseItem].self, forKey: .parses)
+        flags = try c.decodeIfPresent([FlagItem].self, forKey: .flags)
+        lives = try c.decodeIfPresent([LivesItem].self, forKey: .lives)
+    }
 
     struct ParseItem: Codable, Identifiable, Hashable {
         var name: String

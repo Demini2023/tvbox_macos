@@ -12,7 +12,7 @@ enum APIError: LocalizedError {
     case notOK(String)
     case emptyData
     case transport(Error)
-    case decoding(Error)
+    case decoding(String)
 
     var errorDescription: String? {
         switch self {
@@ -24,8 +24,9 @@ enum APIError: LocalizedError {
             return "服务器返回空数据"
         case .transport(let e):
             return "网络错误：\(e.localizedDescription)"
-        case .decoding:
-            return "数据解析失败"
+        case .decoding(let detail):
+            // detail 是 JSONDecoder 的底层报错，含具体字段/类型线索
+            return detail.isEmpty ? "数据解析失败" : "数据解析失败：\(detail)"
         }
     }
 }
@@ -86,6 +87,14 @@ actor APIClient {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw APIError.notOK("HTTP \(http.statusCode)")
         }
+
+        // 服务端出错时返回的是 {"error":"..."} —— 顶层没有 ok 字段，
+        // 直接按 envelope 解码会失败并丢失真实原因，必须先单独识别
+        if let errObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let errMsg = errObj["error"] as? String, !errMsg.isEmpty {
+            throw APIError.notOK(errMsg)
+        }
+
         do {
             let env = try JSONDecoder().decode(APIEnvelope<T>.self, from: data)
             guard env.ok else { throw APIError.notOK(env.error ?? "服务端返回失败") }
@@ -94,7 +103,9 @@ actor APIClient {
         } catch let e as APIError {
             throw e
         } catch {
-            throw APIError.decoding(error)
+            // 透出底层解码原因（字段名/类型不符），便于排查站点返回差异
+            let detail = (error as NSError).debugDescription
+            throw APIError.decoding(detail)
         }
     }
 

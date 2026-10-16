@@ -57,6 +57,69 @@ app.use((req, res, next) => {
 })
 
 /* ---------- 工具 ---------- */
+/**
+ * 归一化分类数据。
+ *
+ * drpy2 的 home() 有三种返回形态，客户端期望的却只有一种：
+ *   1. { class: [{type_id,type_name}, ...] }   标准形态
+ *   2. [{type_id,type_name}, ...]              部分源直接给数组
+ *   3. 字符串 / null                            解析失败或无分类
+ * 这里统一转成 { class: [...] }，并过滤掉缺 type_id 的脏数据，
+ * 否则客户端会因为形状不匹配而整包解码失败。
+ */
+function normalizeClasses(raw) {
+  const fallback = { class: [] }
+  const data = parseJson(raw, fallback)
+  if (data === null || typeof data !== 'object') return fallback
+
+  // 形态 2：直接是数组
+  const arr = Array.isArray(data)
+    ? data
+    : Array.isArray(data.class)
+      ? data.class
+      : Array.isArray(data.classes)
+        ? data.classes
+        : null
+  if (!arr) return fallback
+
+  const list = []
+  for (const it of arr) {
+    if (!it || typeof it !== 'object') continue
+    const id = it.type_id ?? it.typeId ?? it.id
+    const name = it.type_name ?? it.typeName ?? it.name
+    if (id === undefined || id === null || id === '') continue
+    list.push({ type_id: String(id), type_name: String(name ?? id) })
+  }
+  return { class: list }
+}
+
+/**
+ * 归一化影片列表：保证 list 一定是数组，剔除缺 vod_id 的项。
+ * drpy2 各源字段名略有出入（vod_name/vodName 等），这里做一次兼容。
+ */
+function normalizeVodList(raw, extra = {}) {
+  const data = parseJson(raw, { list: [] })
+  const out = { ...extra }
+  const src = Array.isArray(data) ? data : Array.isArray(data.list) ? data.list : []
+  const list = []
+  for (const it of src) {
+    if (!it || typeof it !== 'object') continue
+    const id = it.vod_id ?? it.vodId ?? it.id
+    if (id === undefined || id === null || id === '') continue
+    const name = it.vod_name ?? it.vodName ?? it.name ?? ''
+    const pic = it.vod_pic ?? it.vodPic ?? it.pic ?? ''
+    list.push({
+      ...it,
+      vod_id: String(id),
+      vod_name: String(name),
+      vod_pic: String(pic),
+      vod_remarks: String(it.vod_remarks ?? it.vodRemarks ?? it.remarks ?? ''),
+    })
+  }
+  out.list = list
+  return out
+}
+
 function parseJson(text, fallback) {
   if (text === undefined || text === null || text === '') return fallback
   if (typeof text === 'object') return text
@@ -147,8 +210,8 @@ app.get('/api/site/:key/home', async (req, res) => {
     res.json({
       ok: true,
       data: {
-        classes: parseJson(classes, []),
-        list: parseJson(homeVod, { list: [] }),
+        classes: normalizeClasses(classes),
+        list: normalizeVodList(homeVod, { page: 1 }),
       },
     })
   } catch (e) {
@@ -164,7 +227,7 @@ app.get('/api/site/:key/category', async (req, res) => {
   if (!tid) return res.status(400).json({ error: 'missing tid' })
   try {
     const raw = await withSite(s.site, runtimeOpts(), 'category', { tid, pg })
-    res.json({ ok: true, data: parseJson(raw, { list: [], page: pg }) })
+    res.json({ ok: true, data: normalizeVodList(raw, { page: pg, pagecount: 0, limit: 0, total: 0 }) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -177,7 +240,25 @@ app.get('/api/site/:key/detail', async (req, res) => {
   if (!id) return res.status(400).json({ error: 'missing id' })
   try {
     const raw = await withSite(s.site, runtimeOpts(), 'detail', { id })
-    res.json({ ok: true, data: parseJson(raw, {}) })
+    // drpy2 的 detail 返回 { list: [单个 vod] }；客户端按 list[0] 取值。
+    // 影片字段补空串，避免客户端解码时因缺字段整包失败。
+    const d = normalizeVodList(raw, {})
+    const first = d.list[0] ?? {}
+    d.list = [{
+      ...first,
+      vod_id: String(first.vod_id ?? id),
+      vod_name: String(first.vod_name ?? ''),
+      vod_pic: String(first.vod_pic ?? ''),
+      vod_remarks: String(first.vod_remarks ?? ''),
+      vod_year: String(first.vod_year ?? ''),
+      vod_area: String(first.vod_area ?? ''),
+      vod_actor: String(first.vod_actor ?? ''),
+      vod_director: String(first.vod_director ?? ''),
+      vod_content: String(first.vod_content ?? ''),
+      vod_play_from: String(first.vod_play_from ?? ''),
+      vod_play_url: String(first.vod_play_url ?? ''),
+    }]
+    res.json({ ok: true, data: d })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -191,7 +272,16 @@ app.get('/api/site/:key/play', async (req, res) => {
   if (!id) return res.status(400).json({ error: 'missing id' })
   try {
     const raw = await withSite(s.site, runtimeOpts(), 'play', { flag, id })
-    res.json({ ok: true, data: parseJson(raw, {}) })
+    const p = parseJson(raw, {})
+    res.json({
+      ok: true,
+      data: {
+        parse: Number.isFinite(p.parse) ? p.parse : 0,
+        url: String(p.url ?? ''),
+        flag: String(p.flag ?? flag),
+        header: p.header ?? {},
+      },
+    })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -206,7 +296,7 @@ app.get('/api/site/:key/search', async (req, res) => {
   const quick = req.query.quick === '1' || req.query.quick === 'true'
   try {
     const raw = await withSite(s.site, runtimeOpts(), 'search', { wd, pg, quick })
-    res.json({ ok: true, data: parseJson(raw, { list: [] }) })
+    res.json({ ok: true, data: normalizeVodList(raw, { page: pg, pagecount: 0, limit: 0, total: 0 }) })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
