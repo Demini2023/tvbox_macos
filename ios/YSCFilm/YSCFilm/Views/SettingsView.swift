@@ -52,11 +52,31 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("站点 (\(store.sites.count))") {
-                    ForEach(store.sites) { s in
-                        VStack(alignment: .leading) {
+                Section("站点（可用 \(store.usableSites.count) / 共 \(store.sites.count)）") {
+                    if store.sites.isEmpty {
+                        Text("尚未导入配置").foregroundStyle(.secondary)
+                    }
+                    ForEach(store.usableSites) { s in
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(s.name).font(.subheadline)
-                            Text(s.key).font(.caption2).foregroundStyle(.secondary)
+                            HStack {
+                                Text(s.key).font(.caption2).foregroundStyle(.secondary)
+                                if let label = s.kindLabel {
+                                    Text(label).font(.caption2)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                                }
+                            }
+                        }
+                    }
+                    if store.unsupportedCount > 0 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("已跳过 \(store.unsupportedCount) 个站点")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                            Text("CSP 插件是 Android 原生 Java 插件；「需外部规则」指向 TVBox 客户端私有资源目录，不随配置分发。两者本服务都跑不了。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -98,11 +118,25 @@ struct SettingsView: View {
             request.httpBody = try JSONSerialization.data(withJSONObject: ["url": u])
             let (data, _) = try await URLSession.shared.data(for: request)
             let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+            // 服务端会回报真实可用数量；这里不能用笼统的"导入成功"
+            // 掩盖"配置里有 100 个站但一个都跑不了"的情况
+            let total = obj?["total"] as? Int ?? 0
+            let usable = obj?["usable"] as? Int ?? 0
+            let serverMsg = obj?["message"] as? String
+            let errMsg = obj?["error"] as? String
+
             if (obj?["ok"] as? Bool) == true {
-                importMsg = "导入成功"
+                if usable > 0 {
+                    importMsg = serverMsg ?? "导入成功：\(usable) 个可用站点"
+                } else if total > 0 {
+                    importMsg = "导入完成，但没有可用站点（详见下方说明）"
+                } else {
+                    importMsg = "配置已导入，但里面没有站点"
+                }
                 await store.loadConfig()
             } else {
-                importMsg = obj?["error"] as? String ?? "导入失败"
+                importMsg = errMsg ?? serverMsg ?? "导入失败"
             }
         } catch {
             importMsg = "导入失败：\(error.localizedDescription)"

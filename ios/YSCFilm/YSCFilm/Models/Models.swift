@@ -10,11 +10,16 @@ struct Site: Codable, Identifiable, Hashable {
     var searchable: Int?
     var quickSearch: Int?
     var categories: [Category]?
+    /// 服务端判定该站点本运行时能否执行（CSP 插件为 false）
+    var supported: Bool?
+    var kind: String?
+    var kindLabel: String?
 
     var id: String { key }
 
     enum CodingKeys: String, CodingKey {
         case key, name, type, searchable, quickSearch, categories
+        case supported, kind, kindLabel
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +43,9 @@ struct Site: Codable, Identifiable, Hashable {
         searchable = try c.decodeIfPresent(Int.self, forKey: .searchable) ?? 2
         quickSearch = try c.decodeIfPresent(Int.self, forKey: .quickSearch) ?? 1
         categories = try c.decodeIfPresent([Category].self, forKey: .categories)
+        supported = try c.decodeIfPresent(Bool.self, forKey: .supported)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        kindLabel = try c.decodeIfPresent(String.self, forKey: .kindLabel)
     }
 }
 

@@ -156,6 +156,21 @@ function requireSite(req, res) {
     res.status(404).json({ error: 'site not found: ' + key })
     return null
   }
+  // 不支持的站点明确拒绝，别让它跑到 worker 里报一堆看不懂的错
+  if (site.supported === false) {
+    const why =
+      site.kindLabel === '需外部规则'
+        ? `它的规则文件（${site.ext || '未知'}）指向 TVBox 客户端的私有资源目录，` +
+          `不随 JSON 配置分发，本服务拿不到。`
+        : `它是 ${site.kindLabel || 'CSP'} 类型，属于 Android 原生插件，` +
+          `本服务基于 Node/QuickJS，无法执行。`
+    res.status(400).json({
+      error: `站点「${site.name}」无法运行：${why}`,
+      unsupported: true,
+      kind: site.kind,
+    })
+    return null
+  }
   return { site, cfg }
 }
 
@@ -183,7 +198,42 @@ app.post('/api/config/import', async (req, res) => {
     } else {
       return res.status(400).json({ error: '需要提供 url / json / text 之一' })
     }
-    res.json({ ok: true, data: publicConfig(cfg), message: '配置导入成功' })
+    // 导入成功不等于可用：全是 CSP 插件或依赖外部规则文件时，
+    // 用户点进去仍然是空的。必须把真实可用数量回报给客户端。
+    const pub = publicConfig(cfg)
+    const total = pub.sites?.length ?? 0
+    const usable = pub.sites?.filter((s) => s.supported !== false).length ?? 0
+    const countLabel = (label) =>
+      pub.sites?.filter((s) => s.supported === false && s.kindLabel === label).length ?? 0
+    const cspCount = countLabel('CSP插件')
+    const fileCount = countLabel('需外部规则')
+
+    if (total > 0 && usable === 0) {
+      return res.status(400).json({
+        error:
+          `配置里有 ${total} 个站点，但没有一个能在本服务运行：` +
+          `${cspCount} 个是 CSP 插件（Android 原生 Java 插件），` +
+          `${fileCount} 个依赖 TVBox 客户端私有规则文件（不随配置分发）。` +
+          `请换一个提供 dr_py 内联规则或接口地址的配置。`,
+        data: pub,
+        total,
+        usable,
+      })
+    }
+    const skipped = total - usable
+    res.json({
+      ok: true,
+      data: pub,
+      total,
+      usable,
+      message:
+        usable === total
+          ? `配置导入成功，共 ${total} 个站点`
+          : `配置导入成功：${total} 个站点中 ${usable} 个可用` +
+            (cspCount ? `，${cspCount} 个 CSP 插件` : '') +
+            (fileCount ? `，${fileCount} 个需外部规则文件` : '') +
+            '（均不支持）',
+    })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }

@@ -53,9 +53,14 @@ final class AppStore: ObservableObject {
         Task { await APIClient.shared.setBaseURL(self.serverURL) }
     }
 
-    var sites: [Site] { config?.sites ?? [] }
+    /// 仅本服务真正能跑的站点（CSP 插件会被服务端标 supported=false）
+    var usableSites: [Site] { sites.filter { $0.supported != false } }
+    /// 被跳过的不可用站点数量，设置页要如实告知用户
+    var unsupportedCount: Int { sites.count - usableSites.count }
+
     var selectedSite: Site? {
-        sites.first { $0.key == selectedSiteKey } ?? sites.first
+        let pool = usableSites
+        return pool.first { $0.key == selectedSiteKey } ?? pool.first
     }
     var currentSiteKey: String { selectedSite?.key ?? "" }
 
@@ -66,8 +71,26 @@ final class AppStore: ObservableObject {
         do {
             let cfg = try await APIClient.shared.fetchConfig()
             config = cfg
-            if selectedSiteKey.isEmpty || !cfg.sites.contains(where: { $0.key == selectedSiteKey }) {
-                selectedSiteKey = cfg.sites.first?.key ?? ""
+            let pool = usableSites
+            if pool.isEmpty {
+                // 配置里一个能跑的站点都没有 —— 必须说清楚原因，
+                // 否则首页只会是一片空白，用户无从判断哪里出错
+                let csp = sites.filter { $0.kind == "csp" }.count
+                let file = sites.filter { $0.kind == "ext_file" }.count
+                if sites.isEmpty {
+                    configError = "配置里没有任何站点"
+                } else {
+                    var parts: [String] = []
+                    if csp > 0 { parts.append("\(csp) 个 CSP 插件（Android 原生 Java 插件）") }
+                    if file > 0 { parts.append("\(file) 个依赖 TVBox 客户端私有规则文件（不随配置分发）") }
+                    configError = "配置里 \(sites.count) 个站点全部无法在本服务运行："
+                        + parts.joined(separator: "、")
+                        + "。请换一个提供 dr_py 内联规则或接口地址的配置。"
+                }
+                return
+            }
+            if selectedSiteKey.isEmpty || !pool.contains(where: { $0.key == selectedSiteKey }) {
+                selectedSiteKey = pool.first?.key ?? ""
             }
         } catch {
             configError = error.localizedDescription
