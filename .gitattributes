@@ -1,0 +1,23 @@
+# Swift / 文本文件统一用 LF，避免在 macOS 上产生无意义的整文件 diff
+*.swift   text eol=lf
+*.m       text eol=lf
+*.h       text eol=lf
+*.plist   text eol=lf
+*.mjs     text eol=lf
+*.js      text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+*.py      text eol=lf
+
+# 二进制资源不做行尾转换
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.mp4     binary
+*.ttf     binary
+*.m4a     binary
+*.a       binary
+*.so      binary
+*.wasm    binary
