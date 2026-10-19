@@ -99,6 +99,8 @@ struct PlayerSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> PlayerUIView {
         let v = PlayerUIView()
         v.backgroundColor = .black
+        // 注册画面层：此后每次 play() 都会在开播前把 player 绑到该 layer
+        controller.bindLayer(v.playerLayer)
         return v
     }
 
@@ -110,13 +112,22 @@ struct PlayerSurface: UIViewRepresentable {
 
 final class PlayerUIView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
-    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    private weak var attached: AVPlayer?
+    /// backing layer 本身就是 AVPlayerLayer；暴露给 PlayerSurface 注册到控制器，
+    /// 使 play() 能在开播前完成绑定
+    private(set) lazy var playerLayer: AVPlayerLayer = { layer as! AVPlayerLayer }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        playerLayer.videoGravity = .resizeAspect
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        playerLayer.videoGravity = .resizeAspect
+    }
 
     func attach(player: AVPlayer?) {
-        guard attached !== player else { return }
-        attached = player
+        guard playerLayer.player !== player else { return }
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspect
     }
 }

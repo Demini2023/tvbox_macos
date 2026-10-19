@@ -19,8 +19,23 @@ final class PlayerController: ObservableObject {
     private var avPlayer: AVPlayer?
     private var timeObserver: Any?
 
+    /// 播放画面层（PlayerSurface 创建时注册进来）。
+    /// 必须在 play() 之前把 player 绑到 layer：若先开播后绑定，
+    /// AVPlayerLayer 会错过解码渲染起点，表现为黑屏（声音正常），
+    /// 直到一次 pause/play 把渲染踢活。
+    private weak var boundLayer: AVPlayerLayer?
+
     /// 供 UIViewRepresentable（AVPlayerLayer）绑定使用
     var avPlayerForUI: AVPlayer? { avPlayer }
+
+    /// PlayerSurface 创建/更新时注册画面层；已有播放器立即补绑
+    func bindLayer(_ layer: AVPlayerLayer) {
+        boundLayer = layer
+        if let avPlayer, layer.player !== avPlayer {
+            layer.player = avPlayer
+            layer.videoGravity = .resizeAspect
+        }
+    }
 
     /// 直接播放一个已解析好的地址
     func play(url: String, title: String, episodes: [Episode], index: Int, line: String, site: String = "") {
@@ -40,6 +55,9 @@ final class PlayerController: ObservableObject {
         let player = AVPlayer(url: playURL)
         player.automaticallyWaitsToMinimizeStalling = false
         avPlayer = player
+        // 先绑 layer 再开播：保证 AVPlayerLayer 从第一帧起就参与渲染
+        boundLayer?.player = player
+        boundLayer?.videoGravity = .resizeAspect
         player.play()
         isPlaying = true
         isLoading = false
