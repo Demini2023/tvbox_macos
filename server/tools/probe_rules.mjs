@@ -73,7 +73,28 @@ async function probe(file) {
         const hv = parseMaybe(rt.homeVod({}))
         vods = Array.isArray(hv?.list) ? hv.list.length : 0
       } catch { /* homeVod 失败不影响分类判定 */ }
-      rec.ok = classes > 0 || vods > 0
+
+      // 重要：home() 的分类常常是规则里写死的 class_name/class_url 常量，
+      // 不发任何请求也能返回。只有真的抓到列表才算可用，
+      // 否则会把「网络不通」误判成「站点可用」。
+      if (vods > 0) {
+        rec.ok = true
+      } else if (classes > 0) {
+        // 分类是静态的，退而求其次测一次 category，看能否真出列表
+        const firstTid = home?.class?.[0]?.type_id
+        if (firstTid) {
+          try {
+            const d = parseMaybe(rt.category(firstTid, 1))
+            const L = Array.isArray(d?.list) ? d.list : []
+            if (L.length && L[0].vod_id !== 'no_data') {
+              rec.ok = true
+              rec.vods = L.length
+            }
+          } catch {
+            /* category 失败即视为不可用 */
+          }
+        }
+      }
       rec.classes = classes
       rec.vods = vods
     } finally {
