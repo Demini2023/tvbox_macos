@@ -25,6 +25,11 @@ struct PlayerView: View {
             }
         }
         .onAppear { playAt(PlayerTarget.shared.index) }
+        // 兜底：手势下滑等任何方式退出播放页都停掉播放器。
+        // isFullscreen 时只是被全屏 cover 盖住，不能停。
+        .onDisappear {
+            if !isFullscreen { pc.stop() }
+        }
         .fullScreenCover(isPresented: $isFullscreen) {
             FullscreenPlayerView()
         }
@@ -42,6 +47,7 @@ struct PlayerView: View {
             .background(Color.black)
             .overlay(alignment: .topLeading) {
                 Button {
+                    pc.stop()
                     dismiss()
                 } label: {
                     Image(systemName: "chevron.left")
