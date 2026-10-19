@@ -209,12 +209,13 @@ export function siteCapability(site) {
   }
 
   // ---- dr_py 采集器 ----
-  // ext 有三种形态，可用性差别极大：
-  //   a) 内联 JSON   —— 规则就在配置里   -> 真正可跑
-  //   b) http(s)://   —— 远程规则文件     -> 可跑（运行时现拉）
-  //   c) ./x.js 之类 —— 指向 TVBox 客户端私有资源目录 -> 跑不了，
-  //      那些规则文件不随 JSON 配置分发
-  // 实测绝大多数聚合仓里的 dr_py 站点都是 (c)，点进去必然空白。
+  // ext 有四种形态，可用性差别极大：
+  //   a) 内联 JSON      —— 规则就在配置里            -> 可跑
+  //   b) http(s)://     —— 远程规则文件              -> 可跑（运行时现拉）
+  //   c) 整段 JS 源码   —— 含 var rule = {...}       -> 可跑
+  //   d) ./x.js 之类    —— 指向 TVBox 客户端私有资源目录 -> 跑不了，
+  //                         那些规则文件不随 JSON 配置分发
+  // 实测主流聚合仓里的 dr_py 站点绝大多数是 (d)，点进去必然空白。
   if (ext) {
     if (ext.startsWith('{') || ext.startsWith('[')) {
       return { supported: true, kind: 'drpy', label: 'DrPy采集器', extKind: 'inline' }
@@ -222,6 +223,13 @@ export function siteCapability(site) {
     if (/^https?:\/\//.test(ext)) {
       return { supported: true, kind: 'drpy', label: 'DrPy采集器', extKind: 'remote' }
     }
+    // 整段 JS 源码：drpy2 的 init 对字符串走
+    //   eval("(function(){" + js.replace('var rule','rule') + "})()")
+    // 规则文件开头的 muban.xxx 修改依赖 init() 的闭包局部变量，所以这条必须成立
+    if (/var\s+rule\s*=/.test(ext) || /^\s*muban\./.test(ext)) {
+      return { supported: true, kind: 'drpy', label: 'DrPy采集器', extKind: 'script' }
+    }
+    // 相对路径：文件不在包里
     if (ext.endsWith('.js') || ext.startsWith('./') || ext.startsWith('../')) {
       return { supported: false, reason: 'ext_file', label: '需外部规则' }
     }

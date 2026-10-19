@@ -128,16 +128,82 @@ open YSCFilm.xcodeproj
 | 字段 | 值 |
 |---|---|
 | 服务器 | `http://<电脑局域网IP>:9527`（默认已填 `192.168.20.103:9527`）|
-| 导入配置 | 可选，TVBox 配置地址 |
+| 导入配置 | 可选，见下 |
 
 点「测试连接」应显示**连接成功**，再点「保存并加载配置」。
 随后「设置 → 站点」会列出可用站点，回到首页即可浏览。
+
+### 导入配置：为什么内置了一份现成的
+
+「导入配置」框里可以填任意 TVBox 地址，但**多数共享的聚合仓在你这里会导入成功却几乎不可用**。
+原因是它们现在绝大多数站点是 `type:3 / api:csp_XXX` —— 那是 Android 原生 Java 插件，
+本服务（Node/QuickJS）跑不了。典型分布（实测某 488 站点的聚合仓）：
+
+| 类型 | 数量 | 本服务 |
+|---|---|---|
+| CSP 插件（`csp_XXX`）| 260 | ❌ Android 原生 |
+| 需外部规则（`ext: ./js/xxx.js`）| 224 | ❌ 文件不在配置里 |
+| dr_py 采集器 | 4 | ✅ |
+
+所以仓库里带了一份**自己扫出来、实测可用**的配置：`server/data/drpy-config.json`（79 个站点）。
+
+**最省事的用法**：在 iPhone 设置页的「导入配置」里填
+
+```
+http://<电脑局域网IP>:9527/api/config/drpc
+```
+
+这是服务端内置的路由，直接返回那份可用配置，不需要任何外网访问。
+
+也可以手动导入本地文件内容，或用 curl 灌进去：
+
+```bash
+curl -X POST http://127.0.0.1:9527/api/config/save \
+  -H 'Content-Type: application/json' \
+  --data-binary @server/data/drpy-config.json
+```
+
+### 自己重扫一遍
+
+源站会改版，可用站点会越来越少。仓库带了三个脚本可以重跑：
+
+```bash
+cd server
+
+# 1. 拉取 dr_py 官方规则库（188 个 .js，约 2.3MB）
+node tools/fetch_drpy_rules.mjs --fetch
+#    注：需要能访问 GitHub，国内走 gh-proxy.com
+
+# 2. 逐个实测，筛出真能返回数据的（约 11 分钟，串行）
+node tools/probe_rules.mjs 188
+
+# 3. 打包成配置
+node tools/build_config.mjs
+```
+
+实测通过率约 42%（188 → 79）。跑完后重启服务即可生效。
+
+### 想导入自己的配置，注意 ext 的形态
+
+`ext` 决定站点能不能跑，规则很严格：
+
+| ext 形态 | 例子 | 能否运行 |
+|---|---|---|
+| 整段 JS 源码 | `var rule={title:'xx',...}` | ✅ 走 drpy2 的 eval 分支 |
+| 内联 JSON | `{"title":"xx",...}` | ✅ |
+| 远程 URL | `http://host/xx.js` | ✅ 现拉 |
+| 相对路径 | `./js/xx.js` | ❌ 指向客户端私有目录 |
+| 无效内容 | `""` | ❌ |
 
 ## 已知限制
 
 - **必须与电脑同一 WiFi**，未做公网穿透
 - **需要 macOS/Xcode 编译**。Windows/Linux 上只能改代码，无法产出 App
-- **出网受限环境下**内置兜底配置拉不到（GitHub raw 不可达），必须自己导入可达的配置地址
+- **跑不了 CSP 插件**（`api: csp_XXX`）。那是 Android 原生 Java 实现，需要 DexClassLoader；
+  原 APK 靠下载配置里的 `spider` 字段指向的插件包（本例是伪装成 .png 的 ZIP，内含 2MB DEX）
+  动态加载，本服务没有这一层
+- **源站存活率不确定**。实测 79 个站点能返回分类，但部分站点的分类列表会因源站改版而为空，
+  这是数据源问题不是代码问题；换站点或重跑 probe 即可
 - 部分站点需要嗅探（`parse:1`），客户端会尝试走后端 `/proxy` 转发；对强鉴权站点仍可能失败
 - 未做证书固定，HTTPS 站点走系统默认校验
 

@@ -15,6 +15,7 @@
  * 同时兼容 TVBox 的 ?ac= 风格接口，方便直接用现成播放器接入。
  */
 import express from 'express'
+import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -178,6 +179,29 @@ function requireSite(req, res) {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig()
   res.json({ ok: true, data: publicConfig(cfg) })
+})
+
+/**
+ * 内置的实测可用配置（dr_py 官方规则库扫描产物）。
+ * 手机在局域网内即可直接导入这个地址，不需要任何外网访问。
+ */
+app.get('/api/config/drpc', (req, res) => {
+  const file = path.join(__dirname, 'data', 'drpy-config.json')
+  if (!fs.existsSync(file)) {
+    return res.status(404).json({
+      error:
+        '内置配置不存在。请先运行: node tools/fetch_drpy_rules.mjs --fetch && ' +
+        'node tools/probe_rules.mjs 188 && node tools/build_config.mjs',
+    })
+  }
+  try {
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'))
+    // 返回裸配置对象而非 {ok,data} 信封 —— 这个地址的语义就是
+    // 「一个 TVBox 配置文件」，要让 /api/config/import 能直接吃下它
+    res.json(cfg)
+  } catch (e) {
+    res.status(500).json({ error: '内置配置解析失败: ' + e.message })
+  }
 })
 
 /** 完整配置（含 ext，供高级用法） */

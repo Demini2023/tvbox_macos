@@ -4,8 +4,10 @@ npm-debug.log*
 yarn-error.log*
 package-lock.json.bak
 
-# 运行时数据（本地配置、采集器缓存）
-server/data/
+# 运行时数据（用户导入的配置、采集器日志缓存等）
+server/data/config.json
+server/data/probe-result.json
+server/data/storage.json
 .cache/
 *.log
 
