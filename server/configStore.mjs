@@ -239,8 +239,9 @@ export function siteCapability(site) {
   if (api.startsWith('assets://') || api.startsWith('file://') || api.startsWith('./')) {
     return { supported: true, kind: 'drpy', label: 'DrPy采集器', extKind: 'none' }
   }
-  if (type === 3 || api.startsWith('http://') || api.startsWith('https://')) {
-    return { supported: true, kind: 'xpath', label: '接口源' }
+  // CMS 接口源：api 为 http(s) 且没有 ext（ext 为空才不会被上面的分支接走）
+  if (api.startsWith('http://') || api.startsWith('https://')) {
+    return { supported: true, kind: 'cms', label: '接口源' }
   }
   return { supported: false, reason: 'unknown', label: '不支持' }
 }

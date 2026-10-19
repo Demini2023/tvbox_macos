@@ -1,0 +1,63 @@
+{
+  "spider": "",
+  "wallpaper": "",
+  "sites": [
+    {
+      "key": "cms_00",
+      "name": "非凡资源",
+      "type": 3,
+      "api": "https://api.ffzyapi.com/api.php/provide/vod",
+      "searchable": 2,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cms_01",
+      "name": "量子资源",
+      "type": 3,
+      "api": "https://cj.lziapi.com/api.php/provide/vod",
+      "searchable": 2,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cms_02",
+      "name": "海纳TV",
+      "type": 3,
+      "api": "https://caiji.dyttzyapi.com/api.php/provide/vod",
+      "searchable": 2,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "cms_03",
+      "name": "非凡2",
+      "type": 3,
+      "api": "https://cj.ffzyapi.com/api.php/provide/vod",
+      "searchable": 2,
+      "quickSearch": 1,
+      "filterable": 1
+    }
+  ],
+  "parses": [
+    {
+      "name": "Json并发",
+      "type": 2,
+      "url": "Parallel",
+      "ext": {
+        "token": "",
+        "urlencode": 0,
+        "players": []
+      }
+    }
+  ],
+  "flags": [],
+  "lives": [],
+  "_meta": {
+    "source": "scan_cms_sources.mjs 实测",
+    "probedAt": "2026-10-19T04:15:11.414Z",
+    "total": 10,
+    "usable": 4,
+    "note": "全部为 type=3 的 CMS 接口源，实测列表/详情/播放串三项均通过。详情接口需带 ac=detail 参数，否则不返回封面与播放地址。"
+  }
+}

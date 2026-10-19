@@ -1,0 +1,112 @@
+[
+  {
+    "name": "非凡资源",
+    "api": "https://api.ffzyapi.com/api.php/provide/vod",
+    "classes": 31,
+    "vods": 20,
+    "hasPic": true,
+    "hasPlay": true,
+    "eps": 12,
+    "ok": true,
+    "note": ""
+  },
+  {
+    "name": "量子资源",
+    "api": "https://cj.lziapi.com/api.php/provide/vod",
+    "classes": 44,
+    "vods": 20,
+    "hasPic": true,
+    "hasPlay": true,
+    "eps": 7,
+    "ok": true,
+    "note": ""
+  },
+  {
+    "name": "海纳TV",
+    "api": "https://caiji.dyttzyapi.com/api.php/provide/vod",
+    "classes": 32,
+    "vods": 20,
+    "hasPic": true,
+    "hasPlay": true,
+    "eps": 353,
+    "ok": true,
+    "note": ""
+  },
+  {
+    "name": "非凡2",
+    "api": "https://cj.ffzyapi.com/api.php/provide/vod",
+    "classes": 31,
+    "vods": 20,
+    "hasPic": true,
+    "hasPlay": true,
+    "eps": 2,
+    "ok": true,
+    "note": ""
+  },
+  {
+    "name": "弹幕资源",
+    "api": "https://api.dmswzz.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  },
+  {
+    "name": "天天资源",
+    "api": "https://api.ttyys.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  },
+  {
+    "name": "玩视资源",
+    "api": "https://api.wszxgm.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  },
+  {
+    "name": "雷霆资源",
+    "api": "https://api.leitingnb.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  },
+  {
+    "name": "米星资源",
+    "api": "https://api.xiaomizy.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  },
+  {
+    "name": "红牛资源",
+    "api": "https://api.hongniuzy.com/api.php/provide/vod",
+    "classes": 0,
+    "vods": 0,
+    "hasPic": false,
+    "hasPlay": false,
+    "eps": 0,
+    "ok": false,
+    "note": "列表接口不可达"
+  }
+]

@@ -5,6 +5,7 @@ import { Worker } from 'node:worker_threads'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fileURLToPath as _ } from 'node:url'
+import { dispatchCms } from './cmsCollector.mjs'
 
 void _
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -141,8 +142,16 @@ function getSession(site, opts) {
   return s
 }
 
-/** 在站点上下文中执行一个操作 */
+/**
+ * 在站点上下文中执行一个操作。
+ *
+ * 接口源（type:3 / api 为 http 且无 ext）不走 QuickJS worker ——
+ * 它们是 CMS 采集器，纯 HTTP 转发即可。硬塞给 drpy2 会得到空规则，
+ * 而且日志里会出现一个名字对不上的 "drpy_xxx" 采集器，很误导。
+ */
 export async function withSite(site, opts, op, args) {
+  const cms = await dispatchCms(site, op, args)
+  if (cms) return cms
   const session = getSession(site, opts)
   return session.call(op, args)
 }
