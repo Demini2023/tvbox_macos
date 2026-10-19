@@ -99,9 +99,12 @@ struct Vod: Codable, Identifiable, Hashable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        vod_id = try c.decodeIfPresent(String.self, forKey: .vod_id)
-            ?? c.decodeIfPresent(Int.self, forKey: .vod_id).map { String($0) }
-            ?? ""
+        // vod_id 两种源都可能出：CMS 接口源是 Int，drpy 源是 String。
+        // 注意 decodeIfPresent(String) 遇到数字会「抛错」而非返回 nil，
+        // 所以必须用 try? 包住每一种尝试，任一成功即用。
+        let sId = (try? c.decodeIfPresent(String.self, forKey: .vod_id)) ?? nil
+        let iId = (try? c.decodeIfPresent(Int.self, forKey: .vod_id)) ?? nil
+        vod_id = sId ?? iId.map(String.init) ?? ""
         vod_name = try c.decodeIfPresent(String.self, forKey: .vod_name) ?? "未命名"
         vod_pic = try c.decodeIfPresent(String.self, forKey: .vod_pic)
         vod_remarks = try c.decodeIfPresent(String.self, forKey: .vod_remarks)
@@ -229,7 +232,10 @@ struct VodDetail: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // 所有字段兜底为空串：真实源的选集/元信息字段经常整块缺失，
         // 一旦必填字段缺失就会让整个详情页解码失败
-        vod_id = String((try c.decodeIfPresent(Int.self, forKey: .vod_id)).map(String.init) ?? "")
+        // vod_id：CMS 源是 Int、drpy 源可能是 String，两种都要接住
+        let sId = (try? c.decodeIfPresent(String.self, forKey: .vod_id)) ?? nil
+        let iId = (try? c.decodeIfPresent(Int.self, forKey: .vod_id)) ?? nil
+        vod_id = sId ?? iId.map(String.init) ?? ""
         vod_name = (try c.decodeIfPresent(String.self, forKey: .vod_name)) ?? ""
         vod_pic = (try c.decodeIfPresent(String.self, forKey: .vod_pic)) ?? ""
         vod_remarks = (try c.decodeIfPresent(String.self, forKey: .vod_remarks)) ?? ""

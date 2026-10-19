@@ -111,6 +111,9 @@ function normalizeVodList(raw, extra = {}) {
     const pic = it.vod_pic ?? it.vodPic ?? it.pic ?? ''
     list.push({
       ...it,
+      // 站点 API（/api/site/*）消费方是本项目的 iOS App，其 Vod 模型把
+      // vod_id 定义为 String（drpy 源的 id 常含非数字字符）。
+      // TVBox 代理路径（toVodPage）另有自己的 Number 规整，互不影响。
       vod_id: String(id),
       vod_name: String(name),
       vod_pic: String(pic),
@@ -151,8 +154,7 @@ const runtimeOpts = () => ({
 /** 取站点，找不到则 404 */
 function requireSite(req, res) {
   const key = req.params.key || req.query.key || req.body?.key
-  const cfg = loadConfig()
-  const site = getSite(cfg, key)
+  const site = resolveSite(key)
   if (!site) {
     res.status(404).json({ error: 'site not found: ' + key })
     return null
@@ -172,7 +174,7 @@ function requireSite(req, res) {
     })
     return null
   }
-  return { site, cfg }
+  return { site }
 }
 
 /* ================= 配置接口 ================= */
@@ -182,26 +184,115 @@ app.get('/api/config', (req, res) => {
 })
 
 /**
- * 内置的实测可用配置（dr_py 官方规则库扫描产物）。
- * 手机在局域网内即可直接导入这个地址，不需要任何外网访问。
+ * 读取实测可用的 CMS 站点清单（data/cms-config.json，scan_cms_sources.mjs 扫描产物）。
+ * 这些站点 type=3、api 直接指向外部 CMS 站，本机已 HTTP 实测列表/详情/播放串三项通过。
+ */
+function readCmsSites() {
+  const file = path.join(__dirname, 'data', 'cms-config.json')
+  if (!fs.existsSync(file)) return null
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 站点解析：先看活动配置 config.json，再看实测 CMS 清单 cms-config.json。
+ *
+ * 关键坑：/api/config/drpc|proxy 生成的「指向本服务」的代理配置，被客户端导入后
+ * 它的 api 形如 http://<本机IP>:9527/api.php/provide/vod?site=cms_00 —— 若这份配置
+ * 又被写进了本服务的 config.json（比如通过 /api/config/save），那么 resolveSite 从这里
+ * 取到的是一个「自引用」站点：本服务收到请求后又去请求自己，而自身 provide/vod 返回的是
+ * 不含 code:1 的空包，于是 cmsHome 判空、首页永远「无数据」。
+ *
+ * 因此：一旦从 config.json 取到的站点 api 指向「本服务自身的 /api.php/provide/vod」，
+ * 就跳过它，改从权威外部清单 cms-config.json（含真实外链 api.ffzyapi.com 等）解析。
+ */
+const SELF_PROXY_RE = /\/api\.php\/provide\/vod/
+function resolveSite(key) {
+  const cfg = loadConfig()
+  const fromCfg = getSite(cfg, key)
+  if (fromCfg && !SELF_PROXY_RE.test(String(fromCfg.api || ''))) return fromCfg
+  const cms = readCmsSites()
+  if (cms && Array.isArray(cms.sites)) {
+    const found = cms.sites.find((x) => x.key === key)
+    if (found) return normalizeConfig({ sites: [found] }).sites[0]
+  }
+  // 兜底：config.json 里确实只有自引用站点、且外部清单也没有，则返回原站点
+  // （上层会按 unsupported 处理，避免无意义的自循环）
+  return fromCfg || null
+}
+
+/**
+ * 生成「站点 api 指向本服务」的代理配置。
+ *
+ * 核心思路：让 iPhone 上的标准影视仓把「本服务」当成 type=3 的 CMS 接口源。
+ * 配置里每个站点的 api 都写成：
+ *   http://<本机IP>:9527/api.php/provide/vod?site=<key>
+ * 影视仓随后按标准 provide/vod 协议不断请求 ?ac=list|videolist|detail|vodsearch，
+ * 本服务在内部统一分发到 CMS-HTTP 或 drpy/QuickJS 采集器。
+ *
+ * 好处：
+ *   1) iPhone 不需要自带 drpy 运行时（这正是原 apk 靠壳 + 外部规则才能跑的原因）；
+ *   2) 所有请求都经过本服务，日志可读（用户要求「这样你能直接读 log」）；
+ *   3) 以后 drpy 规则在本机跑通了，直接把站点加进 cms-config.json 风格的清单即可，
+ *      同一套接口继续工作。
+ *
+ * host 取自请求的 Host 头，这样无需硬编码 IP，iPhone 用什么地址导入就用什么地址回源。
+ */
+function buildProxyConfig(req) {
+  const cms = readCmsSites()
+  const base = cms || { sites: [], parses: [] }
+  const host = req.headers.host || `127.0.0.1:${PORT}`
+  const proto = req.headers['x-forwarded-proto'] || 'http'
+  const sites = (base.sites || []).map((s) => ({
+    key: String(s.key),
+    name: String(s.name),
+    type: 3,
+    api: `${proto}://${host}/api.php/provide/vod?site=${encodeURIComponent(s.key)}`,
+    searchable: Number(s.searchable ?? 2),
+    quickSearch: Number(s.quickSearch ?? 1),
+    filterable: Number(s.filterable ?? 0),
+  }))
+  return {
+    spider: '',
+    wallpaper: '',
+    sites,
+    parses: base.parses || [],
+    flags: [],
+    lives: [],
+    _meta: {
+      generatedBy: 'nicewatcher/ysc/server',
+      note:
+        '所有站点的 api 均指向本服务 /api.php/provide/vod（影视仓复刻服务）。' +
+        '由服务内部统一分发到 CMS 接口或 drpy/QuickJS 采集器，iPhone 无需自带 drpy 运行时，' +
+        '且全部请求经过本服务、日志可读。',
+    },
+  }
+}
+
+/** 实测可用的 CMS 接口源配置（type=3，api 直接指向外部 CMS 站，iPhone 可直连，不依赖本服务） */
+app.get('/api/config/cms', (req, res) => {
+  const file = path.join(__dirname, 'data', 'cms-config.json')
+  if (!fs.existsSync(file)) {
+    return res.status(404).json({ error: 'cms-config.json 不存在，请先运行 scan_cms_sources.mjs' })
+  }
+  res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
+})
+
+/** 代理配置：站点 api 指向本服务（推荐，日志可读、无需 iPhone 自带 drpy 运行时） */
+app.get('/api/config/proxy', (req, res) => {
+  res.json(buildProxyConfig(req))
+})
+
+/**
+ * 老链接兼容：/api/config/drpc 原本返回 79 个 drpy 站点（在本机/手机上全部「无数据」）。
+ * 现改为返回「指向本服务」的代理配置，复用同一导入地址即可让首页立刻出数据、
+ * 采集器变为本服务的 CMS 兼容接口（不再依赖手机端 drpy 运行时）。
  */
 app.get('/api/config/drpc', (req, res) => {
-  const file = path.join(__dirname, 'data', 'drpy-config.json')
-  if (!fs.existsSync(file)) {
-    return res.status(404).json({
-      error:
-        '内置配置不存在。请先运行: node tools/fetch_drpy_rules.mjs --fetch && ' +
-        'node tools/probe_rules.mjs 188 && node tools/build_config.mjs',
-    })
-  }
-  try {
-    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'))
-    // 返回裸配置对象而非 {ok,data} 信封 —— 这个地址的语义就是
-    // 「一个 TVBox 配置文件」，要让 /api/config/import 能直接吃下它
-    res.json(cfg)
-  } catch (e) {
-    res.status(500).json({ error: '内置配置解析失败: ' + e.message })
-  }
+  res.json(buildProxyConfig(req))
 })
 
 /** 完整配置（含 ext，供高级用法） */
@@ -313,14 +404,35 @@ app.get('/api/site/:key/detail', async (req, res) => {
   const id = req.query.id || req.query.vod_id || req.query.url
   if (!id) return res.status(400).json({ error: 'missing id' })
   try {
-    const raw = await withSite(s.site, runtimeOpts(), 'detail', { id })
+    // proxyBase：详情里的每个播放地址改写为本服务 /api.php/play 代理，
+    // 否则 feifan 这类「HTML 分享页」线路在 iOS App 里点了没反应。
+    const raw = await withSite(s.site, runtimeOpts(), 'detail', {
+      id,
+      proxyBase: buildPlayProxyBase(req),
+    })
     // drpy2 的 detail 返回 { list: [单个 vod] }；客户端按 list[0] 取值。
     // 影片字段补空串，避免客户端解码时因缺字段整包失败。
     const d = normalizeVodList(raw, {})
     const first = d.list[0] ?? {}
+    // 播放串适配：采集器输出是 TVBox 约定（$$$ 分线路、每组带「线路名$」前缀），
+    // iOS 客户端 VodDetail 按 $$ 分线路、每段直接是「集名$地址」。这里转换。
+    const lineGroups = (s2) => String(s2 ?? '').split('$$$')
+    const iosPlayUrl = lineGroups(first.vod_play_url)
+      .map((g) => {
+        const i = g.indexOf('$')
+        return i >= 0 ? g.slice(i + 1) : g
+      })
+      .filter((g) => g.trim())
+      .join('$$')
+    const iosPlayFrom = lineGroups(first.vod_play_from)
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .join('$$')
+    // VodDetail 模型的 vod_id 是 Int（数字型 CMS id），保持数字
+    const numId = Number(first.vod_id ?? id)
     d.list = [{
       ...first,
-      vod_id: String(first.vod_id ?? id),
+      vod_id: Number.isFinite(numId) && numId !== 0 ? numId : first.vod_id ?? id,
       vod_name: String(first.vod_name ?? ''),
       vod_pic: String(first.vod_pic ?? ''),
       vod_remarks: String(first.vod_remarks ?? ''),
@@ -329,8 +441,8 @@ app.get('/api/site/:key/detail', async (req, res) => {
       vod_actor: String(first.vod_actor ?? ''),
       vod_director: String(first.vod_director ?? ''),
       vod_content: String(first.vod_content ?? ''),
-      vod_play_from: String(first.vod_play_from ?? ''),
-      vod_play_url: String(first.vod_play_url ?? ''),
+      vod_play_from: iosPlayFrom,
+      vod_play_url: iosPlayUrl,
     }]
     res.json({ ok: true, data: d })
   } catch (e) {
@@ -433,35 +545,160 @@ app.get('/website/remote/:name', async (req, res) => {
   res.send(r.body || '')
 })
 
-/* ================= TVBox 风格兼容接口 ================= */
-/**
- * 兼容常见 TVBox 客户端的调用方式：
- *   /api.php/provide/vod?ac=list|detail|vodsearch&...
- * 通过 site 参数选择采集器。
+/* ================= TVBox 风格兼容接口（影视仓直连入口） =================
+ * 让 iPhone 上的标准影视仓把「本服务」当成 type=3 的 CMS 接口源来调用。
+ * 配置里把站点 api 指向 http://<本机IP>:9527/api.php/provide/vod?site=<key> 后，
+ * 影视仓会按标准 provide/vod 协议不断请求 ?ac=list|videolist|detail|vodsearch，
+ * 本服务内部再分发给 CMS-HTTP 或 drpy/QuickJS 采集器。
+ *
+ * 注意：返回的是「裸」TVBox JSON（没有 {ok,data} 信封），影视仓才能解析。
  */
+/** 把采集器输出规整成影视仓期望的影片分页结构，并保留源站的分页信息 */
+function toVodPage(raw, pg = 1) {
+  const data = parseJson(raw, { list: [] })
+  const arr = Array.isArray(data) ? data : Array.isArray(data.list) ? data.list : []
+  const list = []
+  for (const it of arr) {
+    if (!it || typeof it !== 'object') continue
+    const id = it.vod_id ?? it.vodId ?? it.id
+    if (id === undefined || id === null || id === '') continue
+    const name = it.vod_name ?? it.vodName ?? it.name ?? ''
+    const pic = it.vod_pic ?? it.vodPic ?? it.pic ?? ''
+    list.push({
+      ...it,
+      vod_id: Number(id),
+      vod_name: String(name),
+      vod_pic: String(pic),
+      vod_remarks: String(it.vod_remarks ?? it.vodRemarks ?? it.remarks ?? ''),
+    })
+  }
+  return {
+    page: Number(data.page) || pg,
+    pagecount: Number(data.pagecount) || 1,
+    total: Number(data.total) || list.length,
+    limit: Number(data.limit) || 20,
+    list,
+  }
+}
+
+/** detail 结果补空白字段，避免影视仓因缺字段整包解码失败 */
+function enrichDetailList(raw) {
+  const d = normalizeVodList(raw, {})
+  return (d.list || []).map((first) => ({
+    vod_id: Number(first.vod_id ?? ''),
+    vod_name: String(first.vod_name ?? ''),
+    vod_pic: String(first.vod_pic ?? ''),
+    vod_remarks: String(first.vod_remarks ?? ''),
+    vod_year: String(first.vod_year ?? ''),
+    vod_area: String(first.vod_area ?? ''),
+    vod_actor: String(first.vod_actor ?? ''),
+    vod_director: String(first.vod_director ?? ''),
+    vod_content: String(first.vod_content ?? ''),
+    vod_play_from: String(first.vod_play_from ?? ''),
+    vod_play_url: String(first.vod_play_url ?? ''),
+  }))
+}
+
+/**
+ * 根据客户端请求 host 拼出「本服务播放代理」前缀。
+ * 详情里的每个播放地址都会被改写成 `${prefix}<encodeURIComponent(原地址)>`，
+ * 让 iPhone 把请求发回本服务，由 /api.php/play 解析/转发。
+ */
+function buildPlayProxyBase(req) {
+  const host = req.headers.host || (req.get && req.get('host')) || `127.0.0.1:${PORT}`
+  return `http://${host}/api.php/play?u=`
+}
+
+/**
+ * 播放代理：影视仓点播时实际请求这里（地址已由详情改写为 ?u=<encoded>）。
+ *   - 直链媒体（m3u8/mp4/ts/m3u）：直接 302 给播放器；
+ *   - HTML 分享页：抓页提取 index.m3u8 直链再 302。
+ * 这样 feifan 这种「分享页线路」也能在 iPhone 上播，且 CDN 无需 Referer。
+ */
+app.get('/api.php/play', async (req, res) => {
+  const u = req.query.u
+  if (!u || !/^https?:\/\//i.test(u)) return res.status(400).send('bad u')
+  try {
+    const r = await httpFetchAsync(u, {
+      method: 'GET',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 ' +
+          '(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+        Referer: new URL(u).origin + '/',
+        Accept: '*/*',
+      },
+      timeoutMs: 20000,
+    })
+    if (!r || !r.ok || !r.body) {
+      return res.status(502).send('fetch failed: ' + (r && r.status ? r.status : 'no body'))
+    }
+    const ct = String((r.headers && (r.headers['content-type'] || r.headers['Content-Type'])) || '').toLowerCase()
+    const isHtml = ct.includes('html') || (!ct && r.body.trimStart().startsWith('<'))
+    if (isHtml) {
+      // 优先匹配绝对地址；否则匹配带完整目录的相对路径（含 /2026.../ 前缀）
+      const m = r.body.match(
+        /(https?:\/\/[^\s"'<>]+?\.m3u8(?:\?[^\s"'<>]*)?)|(\/[\w.\-/=]+\.m3u8(?:\?[^\s"'<>]*)?)/i,
+      )
+      const origin = new URL(u).origin
+      let m3u8 = null
+      if (m) {
+        const p = m[1] || m[2]
+        m3u8 = p.startsWith('http') ? p : origin + p
+      }
+      if (m3u8) return res.redirect(302, m3u8)
+      return res.status(502).send('无法从页面解析出播放地址')
+    }
+    // 直链媒体：直接 302 给播放器（已验证该 CDN 无需 Referer）
+    res.redirect(302, u)
+  } catch (e) {
+    res.status(502).send('play proxy error: ' + e.message)
+  }
+})
+
 app.all('/api.php/provide/vod', async (req, res) => {
   const src = req.method === 'POST' ? req.body || {} : req.query
   const siteKey = src.site || src.ext
-  const cfg = loadConfig()
-  const site = getSite(cfg, siteKey)
-  if (!site) return res.status(404).json({ error: 'site not found' })
-  const ac = src.ac || 'detail'
+  const ac = String(src.ac || 'detail')
+  const site = resolveSite(siteKey)
+  // 不支持的站点返回空列表，避免客户端整包解码失败
+  if (!site || site.supported === false) {
+    return res.json({ class: [], list: [], page: 1, pagecount: 1, total: 0, limit: 20 })
+  }
+  const t = src.t || src.type_id || src.tid
+  const pg = Number(src.pg || src.page || 1) || 1
+  const wd = src.wd || src.keyword || ''
+  const ids = src.ids || src.id || src.vod_id
   try {
-    let raw
-    if (ac === 'list') raw = await withSite(site, runtimeOpts(), 'home', {})
-    else if (ac === 'detail') raw = await withSite(site, runtimeOpts(), 'category', {
-      tid: src.t,
-      pg: src.pg || 1,
-    })
-    else if (ac === 'vodsearch') raw = await withSite(site, runtimeOpts(), 'search', {
-      wd: src.wd,
-      pg: src.pg || 1,
-      quick: false,
-    })
-    else return res.status(400).json({ error: 'unsupported ac: ' + ac })
-    res.json(parseJson(raw, {}))
+    let body
+    if (ac === 'list') {
+      const classes = normalizeClasses(await withSite(site, runtimeOpts(), 'home', {}))
+      const homeVod = await withSite(site, runtimeOpts(), 'homeVod', {})
+      body = { class: classes.class, list: toVodPage(homeVod, 1).list, filters: {} }
+    } else if (ac === 'videolist') {
+      if (wd) {
+        body = toVodPage(await withSite(site, runtimeOpts(), 'search', { wd, pg, quick: false }), pg)
+      } else if (ids) {
+        // 部分客户端用 ac=videolist&ids= 取详情，统一转 detail
+        const proxyBase = buildPlayProxyBase(req)
+        body = { list: enrichDetailList(await withSite(site, runtimeOpts(), 'detail', { id: ids, proxyBase })) }
+      } else if (t) {
+        body = toVodPage(await withSite(site, runtimeOpts(), 'category', { tid: t, pg }), pg)
+      } else {
+        body = { class: [], list: [], page: 1, pagecount: 1, total: 0, limit: 20 }
+      }
+    } else if (ac === 'detail' || ac === 'vod') {
+      const proxyBase = buildPlayProxyBase(req)
+      body = { list: enrichDetailList(await withSite(site, runtimeOpts(), 'detail', { id: ids, proxyBase })) }
+    } else if (ac === 'vodsearch') {
+      body = toVodPage(await withSite(site, runtimeOpts(), 'search', { wd, pg, quick: false }), pg)
+    } else {
+      body = { class: [], list: [] }
+    }
+    res.json(body)
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    console.error(`[provide/vod] site=${siteKey} ac=${ac} 失败: ${e.message}`)
+    res.json({ class: [], list: [], page: 1, pagecount: 1, total: 0, limit: 20, error: e.message })
   }
 })
 

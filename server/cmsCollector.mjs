@@ -58,7 +58,7 @@ async function cmsHome(site) {
   }))
   // 列表接口不返回 vod_pic，首页推荐仅用于占位，卡片图会空
   const list = (j.list || []).slice(0, 20).map((v) => ({
-    vod_id: String(v.vod_id),
+    vod_id: Number(v.vod_id),
     vod_name: v.vod_name,
     vod_pic: v.vod_pic || '',
     vod_remarks: v.vod_remarks || '',
@@ -72,7 +72,7 @@ async function cmsCategory(site, tid, pg = 1) {
   const j = await getJson(url)
   if (!j) return { page: pg, pagecount: 1, limit: 20, total: 0, list: [] }
   const list = (j.list || []).map((v) => ({
-    vod_id: String(v.vod_id),
+    vod_id: Number(v.vod_id),
     vod_name: v.vod_name,
     vod_pic: v.vod_pic || '',
     vod_remarks: v.vod_remarks || '',
@@ -99,7 +99,18 @@ async function cmsCategory(site, tid, pg = 1) {
  *
  * 保留真实地址很重要：客户端有些会直接拿 vod_play_url 里的地址去播。
  */
-function splitPlayUrl(raw, sourceNames) {
+/**
+ * 把 CMS 播放串规范成 TVBox 两段式，并可选择性地把每个播放地址改写为
+ * 经过本服务 /api.php/play 的代理地址（proxyBase 非空时）。
+ *
+ * 为什么需要代理：很多 CMS 源（如本项目的 feifan 线路）的播放地址是一个
+ * HTML「分享页」而非直链，影视仓拿到网页后无法播放；另一些直链 CDN 会校验
+ * Referer。把地址改写为 /api.php/play?u=<enc> 后，本服务会：
+ *   - 直链媒体：直接 302 给播放器（CDN 无需 Referer 时即可播）；
+ *   - HTML 分享页：抓页提取 index.m3u8 直链再 302。
+ * 这样无论哪条线路、哪种源都能在 iPhone 上播。
+ */
+function splitPlayUrl(raw, sourceNames, proxyBase) {
   // 线路名用 $$$ 分隔，不是逗号 —— 这是最容易踩的坑
   const names = String(sourceNames || '')
     .split('$$$')
@@ -109,21 +120,38 @@ function splitPlayUrl(raw, sourceNames) {
   return groups
     .map((g, gi) => {
       const srcName = names[gi] || `线路${gi + 1}`
-      const eps = g.split('#').filter(Boolean).join('#')
+      const eps = g
+        .split('#')
+        .filter(Boolean)
+        .map((seg) => {
+          // 单集格式："第01集$地址"，地址里可能也含 $，取最后一个 $
+          const idx = seg.lastIndexOf('$')
+          if (idx < 0) return seg
+          const epName = seg.slice(0, idx)
+          let url = seg.slice(idx + 1)
+          if (proxyBase && /^https?:\/\//i.test(url)) {
+            url = proxyBase + encodeURIComponent(url)
+          }
+          return `${epName}$${url}`
+        })
+        .join('#')
       return `${srcName}$${eps}`
     })
     .join('$$$')
 }
 
-/** 详情：必须带 ac=detail，否则没有封面和播放地址 */
-async function cmsDetail(site, id) {
+/**
+ * 详情：必须带 ac=detail，否则没有封面和播放地址。
+ * @param {string} proxyBase 可选，播放地址改写为本服务代理的前缀
+ */
+async function cmsDetail(site, id, proxyBase) {
   const url = `${site.api}?ac=detail&ids=${encodeURIComponent(id)}`
   const j = await getJson(url)
   if (!j || !Array.isArray(j.list) || !j.list.length) return { list: [] }
   const v = j.list[0]
   // TVBox 约定：vod_play_from 是线路名列表（$$$ 分隔），
   // vod_play_url 是与之一一对应的 "集名$地址" 串。
-  const plays = splitPlayUrl(v.vod_play_url, v.vod_play_from)
+  const plays = splitPlayUrl(v.vod_play_url, v.vod_play_from, proxyBase)
   const fromNames = plays
     .split('$$$')
     .map((seg) => seg.split('$')[0] || '')
@@ -131,7 +159,7 @@ async function cmsDetail(site, id) {
   return {
     list: [
       {
-        vod_id: String(v.vod_id),
+        vod_id: Number(v.vod_id),
         vod_name: v.vod_name || '',
         vod_pic: v.vod_pic || '',
         type_name: v.type_name || '',
@@ -164,7 +192,7 @@ async function cmsSearch(site, wd, quick = false) {
   if (!j) return { list: [] }
   return {
     list: (j.list || []).slice(0, 60).map((v) => ({
-      vod_id: String(v.vod_id),
+      vod_id: Number(v.vod_id),
       vod_name: v.vod_name,
       vod_pic: v.vod_pic || '',
       vod_remarks: v.vod_remarks || '',
@@ -190,7 +218,7 @@ export async function dispatchCms(site, op, args = {}) {
     case 'category':
       return await cmsCategory(site, args.tid ?? args.tId, Number(args.pg) || 1)
     case 'detail':
-      return await cmsDetail(site, args.id)
+      return await cmsDetail(site, args.id, args.proxyBase)
     case 'play':
       return await cmsPlay(site, args.flag, args.id)
     case 'search':
