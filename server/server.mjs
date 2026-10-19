@@ -619,19 +619,30 @@ app.get('/api.php/play', async (req, res) => {
   const u = req.query.u
   if (!u || !/^https?:\/\//i.test(u)) return res.status(400).send('bad u')
   try {
-    const r = await httpFetchAsync(u, {
-      method: 'GET',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 ' +
-          '(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-        Referer: new URL(u).origin + '/',
-        Accept: '*/*',
-      },
-      timeoutMs: 20000,
-    })
+    // 上游 CDN 偶发「200 但空 body」（实测 ffzy 出现过一次，重试即恢复），
+    // 故这里重试一次；两次都失败才放弃
+    const fetchOnce = () =>
+      httpFetchAsync(u, {
+        method: 'GET',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 ' +
+            '(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+          Referer: new URL(u).origin + '/',
+          Accept: '*/*',
+        },
+        timeoutMs: 20000,
+      })
+    let r = await fetchOnce()
     if (!r || !r.ok || !r.body) {
-      return res.status(502).send('fetch failed: ' + (r && r.status ? r.status : 'no body'))
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      r = await fetchOnce()
+    }
+    if (!r || !r.ok || !r.body) {
+      return res
+        .status(502)
+        .send('fetch failed: ' + (r && r.status ? r.status : 'no body') +
+              ' bodyLen=' + (r && r.body ? r.body.length : 0))
     }
     const ct = String((r.headers && (r.headers['content-type'] || r.headers['Content-Type'])) || '').toLowerCase()
     const isHtml = ct.includes('html') || (!ct && r.body.trimStart().startsWith('<'))
