@@ -91,7 +91,10 @@ struct PlayerView: View {
 
 /// UIViewRepresentable 包装 AVPlayerLayer
 struct PlayerSurface: UIViewRepresentable {
-    var controller: PlayerController
+    /// 必须 @ObservedObject：否则 controller 引用不变，SwiftUI 判定视图未变，
+    /// 永远不会再次调 updateUIView，后创建的 AVPlayer 就绑不到 layer 上
+    ///（症状：有声音、无画面）。
+    @ObservedObject var controller: PlayerController
 
     func makeUIView(context: Context) -> PlayerUIView {
         let v = PlayerUIView()
@@ -100,11 +103,8 @@ struct PlayerSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerUIView, context: Context) {
-        // updateUIView 可能在非主线程被调用，统一切回主线程操作 AVPlayerLayer
-        let player = controller.avPlayerForUI
-        DispatchQueue.main.async {
-            uiView.attach(player: player)
-        }
+        // updateUIView 由 SwiftUI 保证在主线程调用，直接绑定即可
+        uiView.attach(player: controller.avPlayerForUI)
     }
 }
 
