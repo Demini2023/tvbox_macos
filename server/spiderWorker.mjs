@@ -109,6 +109,30 @@ async function ensureRuntime(site, opts) {
   } else {
     rt.initRule(built)
   }
+
+  // hostJs 是运行时求值的，parseSiteExt 阶段 rule.host 还是空串，
+  // 导致 url/searchUrl/detailUrl 这些相对路径没被拼上主机，
+  // category() 里就会拼出 "/xxx/page/1" 这种无法请求的地址。
+  // 这里回读 init 后的 rule（此时 hostJs 已求出真实 host）再补一次拼接。
+  try {
+    const finalRule = rt.getRule()
+    if (finalRule && finalRule.host) {
+      const host = String(finalRule.host).replace(/\/+$/, '')
+      const patch = {}
+      for (const key of ['url', 'searchUrl', 'detailUrl']) {
+        const v = finalRule[key]
+        if (typeof v !== 'string' || !v) continue
+        if (/^https?:/i.test(v)) continue
+        if (/^js:/i.test(v)) continue
+        patch[key] = host + (v.startsWith('/') ? v : '/' + v)
+      }
+      if (!finalRule.homeUrl) patch.homeUrl = host
+      if (Object.keys(patch).length) rt.patchRule(patch)
+    }
+  } catch {
+    /* 修正失败不致命，保留原规则继续跑 */
+  }
+
   currentKey = site.key
   return rt
 }

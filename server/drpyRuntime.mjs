@@ -103,6 +103,22 @@ function toJs(ctx, value) {
   return ctx.undefined
 }
 
+/**
+ * 把「单个对象」形式的调用摊平成位置参数。
+ *
+ * drpy2 导出的都是位置参数签名，如 category(tid, pg, filter, extend)。
+ * 若调用方只传一个对象，tid 会变成整个对象，
+ * categoryParse 里 url.replaceAll('fyclass', cateObj.tid) 就会
+ * 拼出 "https://host/[object Object]/page/1" —— 不报错，静默失败。
+ * 这里按 names 顺序展开，让两种写法都安全。
+ */
+function normalizePositional(args, names) {
+  if (args.length !== 1) return args
+  const only = args[0]
+  if (!only || typeof only !== 'object' || Array.isArray(only)) return args
+  return names.map((n) => only[n])
+}
+
 /** 安全 JSON 序列化 */
 function safeJson(v) {
   try {
@@ -178,6 +194,11 @@ export async function createRuntime(opts = {}) {
     const h = ctx.newFunction(name, fn)
     ctx.setProp(g, name, h)
     h.dispose()
+  }
+  /** 注入对象（非函数）到全局，如解析器桥 __hostBridge */
+  const defObj = (name, obj) => {
+    ctx.setProp(g, name, obj)
+    obj.dispose()
   }
   const setStr = (key, value) => {
     const h = ctx.newString(String(value))
@@ -286,10 +307,11 @@ export async function createRuntime(opts = {}) {
     }
     return arr
   }
-  // pd(code, html) 或 pd(html)
-  const pdImpl = (a, b) => {
-    const argc = ctx.getLength(a)
-    const html = argc >= 2 ? ctx.getString(b) : ctx.getString(a)
+  // pd() 需要返回字符串值而非 DOM 对象，真正实现在下方「解析表达式」段。
+  // 这里只保留 pdfl（dr_py 里用于返回 DocumentFragment 的变体）。
+  const domObjImpl = (a, b) => {
+    // 两参形态 pdfl(html, sel)；单参时把 a 当 html
+    const html = ctx.typeof(b) === 'string' ? ctx.getString(b) : ctx.getString(a)
     const dom = host.createDOM(html)
     const obj = ctx.newObject()
     const fF = ctx.newFunction('find', (sh) => findNodes(dom.find(sh ? ctx.getString(sh) : '')))
@@ -309,9 +331,7 @@ export async function createRuntime(opts = {}) {
     hF.dispose()
     return obj
   }
-  def('pd', pdImpl)
-  def('pdfa', pdImpl)
-  def('pdfl', pdImpl)
+  def('pdfl', domObjImpl)
 
   /* ---------- 本地存储 setItem/getItem/removeItem/local ---------- */
   const storage = new Map()
@@ -408,17 +428,89 @@ export async function createRuntime(opts = {}) {
     }
   })
 
-  /* ---------- 解析表达式 pdfh / pdfa2 ---------- */
-  // pdfh(html, parse) -> string
+  /* ---------- 解析表达式 pdfh / pdfa / pd ---------- */
+  // drpy2.js 内部通过 defaultParser.{pdfh,pdfa,pd} 做实际解析，
+  // 而 pdfh2/pdfa2/pd2 是它的包装层（负责把节点对象转成字符串）。
+  // 签名统一是 (html, parse)，返回值语义各不相同：
+  //   pdfh  -> string   取第一个匹配项的文本/属性
+  //   pdfa  -> string[] 批量取值（换行拼接的字符串数组）
+  //   pd    -> string   带 baseUrl 自动 urljoin
+  // drpy2 的包装层：入参可能是节点对象，需先转字符串。
+  // 注意 ctx.getProp(handle, key) 直接返回新的 handle（无 value/error 包装），
+  // 若按 {value,error} 解构会拿到 undefined，导致取值静默为空。
+  const toHtml = (h) => {
+    if (!h) return ''
+    const t = ctx.typeof(h)
+    if (t === 'string') return ctx.getString(h)
+    if (t === 'undefined' || t === 'null') return ''
+    for (const key of ['__html', 'ele', 'html']) {
+      const v = ctx.getProp(h, key)
+      if (ctx.typeof(v) === 'string' && ctx.getString(v)) {
+        const s = ctx.getString(v)
+        v.dispose()
+        return s
+      }
+      if (ctx.typeof(v) === 'undefined') v.dispose()
+    }
+    return ''
+  }
+
+  /**
+   * 把 HTML 片段包成带 __html 属性的对象，供 pdfh2/pd2 二次取值。
+   *
+   * 注意：setProp 会把字符串值复制进运行时，所以不能在这里 dispose 掉
+   * s —— 早前版本 dispose 了，导致 __html 变成悬空 handle，
+   * pdfh2/pd2 取值全为空（不报错，静默失败）。
+   */
+  const fragObj = (htmlStr) => {
+    const o = ctx.newObject()
+    ctx.setProp(o, '__html', ctx.newString(htmlStr))
+    return o
+  }
+
   def('pdfh', (h1, h2) => {
     const html = ctx.getString(h1)
     const parse = ctx.getString(h2)
     return ctx.newString(parseEngine.parseExpr(html, parse))
   })
-  def('pdfa2', (h1, h2) => {
+  def('pdfa', (h1, h2) => {
     const html = ctx.getString(h1)
     const parse = ctx.getString(h2)
-    return ctx.newString(parseEngine.parseAll(html, parse))
+    const arr = parseEngine.parseAll(html, parse)
+    const ja = ctx.newArray()
+    arr.forEach((h, i) => {
+      const o = fragObj(h)
+      ctx.setProp(ja, i, o)
+      o.dispose()
+    })
+    return ja
+  })
+  def('pd', (h1, h2, h3) => {
+    // pd(html, parse, baseUrl)
+    const html = ctx.getString(h1)
+    const parse = ctx.getString(h2)
+    const base = ctx.typeof(h3) === 'string' ? ctx.getString(h3) : ''
+    return ctx.newString(parseEngine.parseExpr(html, parse, base))
+  })
+  def('pdfh2', (h1, h2) => {
+    return ctx.newString(parseEngine.parseExpr(toHtml(h1), ctx.getString(h2)))
+  })
+  def('pdfa2', (h1, h2) => {
+    const html = toHtml(h1)
+    const arr = parseEngine.parseAll(html, ctx.getString(h2))
+    const ja = ctx.newArray()
+    arr.forEach((h, i) => {
+      const o = fragObj(h)
+      ctx.setProp(ja, i, o)
+      o.dispose()
+    })
+    return ja
+  })
+  def('pd2', (h1, h2, h3) => {
+    // ctx.getLength 对字符串返回 0，不能用来判断可选参数是否存在，
+    // 一律用 ctx.typeof 判断。
+    const base = ctx.typeof(h3) === 'string' ? ctx.getString(h3) : ''
+    return ctx.newString(parseEngine.parseExpr(toHtml(h1), ctx.getString(h2), base))
   })
 
   /* ---------- 加载 drpy2 驱动 ---------- */
@@ -426,11 +518,81 @@ export async function createRuntime(opts = {}) {
   //   import cheerio from 'assets://js/lib/cheerio.min.js'
   //   import './模板.js'
   // QuickJS 解析器只接受 './xxx.js' 或 http(s)，故加载前重写 import 说明符。
+  //
+  // __hostBridge 是解析器桥：drpy2 的 const defaultParser 被替换成读它，
+  // 这样 jsp.pdfh / jq.pdfa / parseTags.* 全都会走宿主实现。
+  {
+    const b = ctx.newObject()
+    const fPdfh = ctx.newFunction('pdfh', (h1, h2) => {
+      return ctx.newString(parseEngine.parseExpr(toHtml(h1), ctx.getString(h2)))
+    })
+    const fPdfa = ctx.newFunction('pdfa', (h1, h2) => {
+      const arr = parseEngine.parseAll(toHtml(h1), ctx.getString(h2))
+      const ja = ctx.newArray()
+      arr.forEach((x, i) => {
+        const o = fragObj(x)
+        ctx.setProp(ja, i, o)
+        o.dispose()
+      })
+      return ja
+    })
+    const fPd = ctx.newFunction('pd', (h1, h2, h3) => {
+      const base = ctx.typeof(h3) === 'string' ? ctx.getString(h3) : ''
+      return ctx.newString(parseEngine.parseExpr(toHtml(h1), ctx.getString(h2), base))
+    })
+    ctx.setProp(b, 'pdfh', fPdfh)
+    ctx.setProp(b, 'pdfa', fPdfa)
+    ctx.setProp(b, 'pd', fPd)
+    fPdfh.dispose()
+    fPdfa.dispose()
+    fPd.dispose()
+    defObj('__hostBridge', b)
+  }
+
   const drpySrc = moduleSources.get('drpy2.js')
   if (!drpySrc) throw new Error('libs/drpy2.js not found')
   const drpyRewritten = rewriteImports(drpySrc)
+  // 把 drpy2 内置的 pdfh/pdfa/pd 换成宿主注入的实现。
+  //
+  // 为什么要换：drpy2 里 const defaultParser = {pdfh, pdfa, pd}，
+  // const jsp = parseTags.jsp —— 都是模块级 const，外部无法覆盖。
+  // 而它们内部的 pdfh 依赖 cheerio 的对象形态（html.rr/html.ele），
+  // 本宿主的 DOM 实现没有这套 API，导致 hostJs 里
+  // `jsp.pdfh(html, ".go:eq(0)&&a&&href")` 返回 undefined，
+  // 继而 HOST 为空、后续相对路径请求全崩。
+  // 改写函数声明为读取全局桥接变量，即可让整条解析链路走宿主实现。
+  //
+  // 另外两处改写：
+  // 1) __setRule：drpy2 只有 getRule 没有 setter，而 hostJs 是运行时求值的，
+  //    init 后才知道真实 host，需要把补齐过主机的字段写回同一份 rule。
+  // 2) cheerio.jinja2：去掉 fallback。drpy2 原写法是
+  //      try { return jinja.render(t,o) } catch { return _jinja2(t,o) }
+  //    而 _jinja2（cheerio 内置那个）对缺失键会渲染成 [object Object]，
+  //    并且会把 fyclass 这类普通文本吃掉，实测拼出
+  //    "https://host/[object Object]/page/NaN"。宿主提供的 jinja 实现
+  //    缺失键渲染为空串且保留其它文本，是正确行为，因此直接去掉 fallback。
+  const drpyPatched = drpyRewritten
+    .replace(
+      /export\s+default\s*\{/,
+      'export function __setRule(patch){if(patch){for(var k in patch){rule[k]=patch[k]}}return true}\nexport default {__setRule,'
+    )
+    .replace(
+      /cheerio\.jinja2\s*=\s*function\s*\([\s\S]{0,400}?return\s+_jinja2\(template,\s*obj\)\s*\n?\};/,
+      'cheerio.jinja2 = function (template, obj) {\n' +
+        '    try {\n' +
+        '        return jinja.render(template, obj);\n' +
+        '    } catch (e) {\n' +
+        "        log('jinja渲染失败:' + e.message);\n" +
+        "        return String(template).replace(/\\{\\{[^}]*\\}\\}/g, '');\n" +
+        '    }\n' +
+        '};'
+    )
+    .replace(
+      /const\s+defaultParser\s*=\s*\{\s*pdfh:\s*pdfh\s*,\s*pdfa:\s*pdfa\s*,\s*pd:\s*pd\s*,?\s*\}/,
+      'const defaultParser = { pdfh: (__h)=>__hostBridge.pdfh(__h), pdfa: (__h)=>__hostBridge.pdfa(__h), pd: (__h,__p,__b)=>__hostBridge.pd(__h,__p,__b) }'
+    )
   evalDeadline = Date.now()
-  const mod = ctx.evalCode(drpyRewritten, 'drpy2.js', { type: 'module' })
+  const mod = ctx.evalCode(drpyPatched, 'drpy2.js', { type: 'module' })
   if (mod.error) {
     const e = ctx.dump(mod.error)
     const msg = e && e.message ? e.message : JSON.stringify(e)
@@ -496,12 +658,71 @@ export async function createRuntime(opts = {}) {
     },
     /** 初始化规则：传入规则对象（来自 JSON 配置的 spider/meta） */
     initRule: (ruleObj) => call('init', [ruleObj]),
+    /** 调试用：在运行时里执行任意表达式，返回 JSON 化结果 */
+    evalJs: (code) => {
+      const r = ctx.evalCode(code, 'probe.js')
+      if (r.error) {
+        const msg = ctx.dump(r.error)?.message || 'eval error'
+        r.dispose()
+        throw new Error(msg)
+      }
+      const out = ctx.dump(r.value)
+      r.dispose()
+      return out
+    },
+    /**
+     * 读回 init 后的 rule 对象（drpy2 自身导出了 getRule）。
+     *
+     * 用途：hostJs 是运行时求值的，parseSiteExt 阶段拿不到真实 host，
+     * 导致 url/searchUrl/detailUrl 这些相对路径没被拼上主机。
+     * init 完成后回读一次才能拿到最终 rule。
+     */
+    getRule: () => {
+      const fn = resolve('getRule')
+      if (ctx.typeof(fn) !== 'function') {
+        fn.dispose()
+        return null
+      }
+      const res = ctx.callFunction(fn, ctx.undefined)
+      fn.dispose()
+      if (res.error) {
+        res.dispose()
+        return null
+      }
+      const out = ctx.dump(res.value)
+      res.dispose()
+      return out
+    },
+    /**
+     * 回写 rule 字段（用于 init 后补齐 host 拼接等修正）。
+     * drpy2 原始导出没有 setter，这里通过在模块作用域内执行的
+     * 补丁函数写入（__setRule 由源码改写阶段注入，能访问闭包里的 rule）。
+     */
+    patchRule: (patch) => {
+      if (!patch || typeof patch !== 'object') return false
+      const setter = resolve('__setRule')
+      if (ctx.typeof(setter) !== 'function') {
+        setter.dispose()
+        return false
+      }
+      const js = ctx.newString(JSON.stringify(patch))
+      const res = ctx.callFunction(setter, ctx.undefined, js)
+      js.dispose()
+      setter.dispose()
+      const ok = !res.error
+      res.dispose()
+      return ok
+    },
     home: (...a) => call('home', a),
     homeVod: (...a) => call('homeVod', a),
-    category: (...a) => call('category', a),
-    detail: (...a) => call('detail', a),
-    play: (...a) => call('play', a),
-    search: (...a) => call('search', a),
+    // drpy2 导出的是位置参数签名 category(tid, pg, filter, extend)。
+    // 误传单个对象会把整个对象当成 tid，导致 replaceAll('fyclass', obj)
+    // 拼出 "[object Object]"。这里显式摊平对象形式，避免这类静默错误。
+    category: (...a) => call('category', normalizePositional(a, ['tid', 'pg', 'filter', 'extend'])),
+    detail: (...a) => call('detail', normalizePositional(a, ['id'])),
+    play: (...a) => call('play', normalizePositional(a, ['flag', 'id'])),
+    search: (...a) =>
+      call('search', normalizePositional(a, ['wd', 'quick', 'pg'])),
     proxy: (...a) => call('proxy', a),
     dispose() {
       try {

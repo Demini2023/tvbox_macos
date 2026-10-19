@@ -26,9 +26,10 @@ function selectNodes(html, selector) {
  * 核心：执行一条解析表达式
  * @param {string} html
  * @param {string} parse
+ * @param {string} [baseUrl] 传入时把 href/src 等相对地址补成绝对地址（对应 dr_py 的 pd）
  * @returns {string}
  */
-export function parseExpr(html, parse) {
+export function parseExpr(html, parse, baseUrl = '') {
   let expr = String(parse || '').trim()
   if (!expr) return ''
 
@@ -38,15 +39,29 @@ export function parseExpr(html, parse) {
   // || 分隔的多规则：逐个尝试，取第一个非空
   if (expr.includes('||')) {
     for (const part of expr.split('||')) {
-      const v = parseSingle(html, part.trim())
+      const v = parseSingle(html, part.trim(), baseUrl)
       if (v !== '' && v !== null && v !== undefined) return String(v)
     }
     return ''
   }
-  return parseSingle(html, expr)
+  return parseSingle(html, expr, baseUrl)
 }
 
-function parseSingle(html, expr) {
+/** 取值属性若是 href/src/data-original 且拿到相对地址，拼成绝对地址 */
+function absolutize(value, accessor, baseUrl) {
+  if (!value || !baseUrl) return value
+  const attr = String(accessor || '').replace(/^[@:]/, '')
+  const urlAttrs = ['href', 'src', 'data-original', 'data-src', 'data-url', 'poster']
+  if (!urlAttrs.includes(attr.toLowerCase())) return value
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:')) return value
+  try {
+    return new URL(value, baseUrl).toString()
+  } catch {
+    return value
+  }
+}
+
+function parseSingle(html, expr, baseUrl = '') {
   let e = expr.trim()
   if (!e) return ''
 
@@ -85,11 +100,11 @@ function parseSingle(html, expr) {
       return raw === undefined ? '' : applyRegex(String(raw), attrRe[2])
     }
     const out = nodes.map((n) => extract(n, accessor)).find((v) => v !== '' && v != null)
-    if (out !== undefined) return postProcess(out, accessor, nodes[0])
+    if (out !== undefined) return absolutize(postProcess(out, accessor, nodes[0]), accessor, baseUrl)
     const la = attrFromLocator(locator)
     if (la) {
       const v = nodes[0].attr(la.name)
-      if (v !== undefined && v !== '') return String(v)
+      if (v !== undefined && v !== '') return absolutize(String(v), la.name, baseUrl)
     }
     return ''
   }
@@ -208,20 +223,41 @@ function postProcess(value, accessor, node) {
   return out
 }
 
-/** pdfa：返回所有匹配（数组的文本），dr_py 里返回字符串 */
+/**
+ * pdfa：批量定位，返回匹配节点的 HTML 片段数组。
+ *
+ * drpy2 的用法是 `let list = pdfa(html, p[0]); list.forEach(it => {...})`，
+ * 之后对每个 it 调 pdfh2/pd2 取值。所以必须返回数组而不是拼接字符串。
+ * 每个元素是该节点的 outerHTML，由 drpyRuntime 包成带 __html 的对象。
+ *
+ * 注意 p[0] 里的 '&&' 有二义性：'.mrb&&li' 既像 accessor 分隔，
+ * 又像后代选择器。dr_py 原生实现是按「先定位 .mrb，再在其中找 li」处理，
+ * 因此这里做两级尝试：完整串 -> 只取 && 前段 -> && 两段组合。
+ */
 export function parseAll(html, parse) {
   const expr = String(parse || '').trim()
-  if (!expr || expr.startsWith('js:')) return ''
-  let locator = expr
-  let accessor = 'text'
-  if (expr.includes('&&')) {
-    const i = expr.indexOf('&&')
-    locator = expr.slice(0, i).trim()
-    accessor = expr.slice(i + 2).trim()
+  if (!expr || expr.startsWith('js:')) return []
+
+  const toHtml = (n) => (typeof n.html === 'function' ? n.html() : '')
+
+  if (!expr.includes('&&')) {
+    return selectNodes(html, stripAttr(expr)).map(toHtml)
   }
-  const nodes = selectNodes(html, stripAttr(locator))
-  return nodes
-    .map((n) => extract(n, accessor))
-    .filter((v) => v !== '')
-    .join('\n')
+
+  // 形态 A：'a&&b&&c' —— 首段定位，其余是取值表达式，不应下钻
+  // 形态 B：'.mrb&&li'    —— 两段且首段是选择器，第二段是子选择器
+  const segs = expr.split('&&').map((s) => s.trim()).filter(Boolean)
+
+  // 优先按「后代选择器」组合尝试：能拿到多个节点就用它
+  if (segs.length === 2 && !/^(text|Text|html|Html)$/.test(segs[1])) {
+    const combined = selectNodes(html, `${stripAttr(segs[0])} ${segs[1]}`)
+    if (combined.length > 1) return combined.map(toHtml)
+    if (combined.length === 1) {
+      // 单个匹配时仍可能正确（如 .mrb 下只有一个 li）
+      const only = selectNodes(html, stripAttr(segs[0]))
+      if (only.length !== 1) return combined.map(toHtml)
+    }
+  }
+  // 回退：'a&&b' 当作 accessor 分隔
+  return selectNodes(html, stripAttr(segs[0])).map(toHtml)
 }
