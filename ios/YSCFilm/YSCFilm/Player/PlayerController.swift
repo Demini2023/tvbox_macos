@@ -11,6 +11,11 @@ final class PlayerController: ObservableObject {
     @Published var episodes: [Episode] = []
     @Published var currentIndex: Int = 0
 
+    /// 播放进度（秒），进度条消费
+    @Published var currentTime: Double = 0
+    /// 总时长（秒）；直播/未知时为 0
+    @Published var duration: Double = 0
+
     /// 当前播放线路名
     @Published var currentLine: String = ""
     /// 当前播放站点（换集解析时需要）
@@ -18,6 +23,8 @@ final class PlayerController: ObservableObject {
 
     private var avPlayer: AVPlayer?
     private var timeObserver: Any?
+    /// 周期进度回调（0.5s），驱动 currentTime/duration
+    private var tickObserver: Any?
 
     /// 播放画面层（PlayerSurface 创建时注册进来）。
     /// 必须在 play() 之前把 player 绑到 layer：若先开播后绑定，
@@ -55,12 +62,27 @@ final class PlayerController: ObservableObject {
         let player = AVPlayer(url: playURL)
         player.automaticallyWaitsToMinimizeStalling = false
         avPlayer = player
+        currentTime = 0
+        duration = 0
         // 先绑 layer 再开播：保证 AVPlayerLayer 从第一帧起就参与渲染
         boundLayer?.player = player
         boundLayer?.videoGravity = .resizeAspect
         player.play()
         isPlaying = true
         isLoading = false
+
+        // 周期回调：刷新进度与时长
+        tickObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] t in
+            Task { @MainActor in
+                guard let self, self.avPlayer === player else { return }
+                self.currentTime = max(0, t.seconds.isFinite ? t.seconds : 0)
+                let d = player.currentItem?.duration.seconds ?? 0
+                if d.isFinite, d > 0 { self.duration = d }
+            }
+        }
 
         // 播放结束自动下一集
         timeObserver = NotificationCenter.default.addObserver(
@@ -108,6 +130,15 @@ final class PlayerController: ObservableObject {
         }
     }
 
+    /// 跳转到指定秒数（进度条拖动）
+    func seek(to seconds: Double) {
+        guard let avPlayer else { return }
+        let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
+        let t = CMTime(seconds: clamped, preferredTimescale: 600)
+        avPlayer.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
+        currentTime = clamped
+    }
+
     func togglePlay() {
         guard let avPlayer else { return }
         if isPlaying {
@@ -141,13 +172,20 @@ final class PlayerController: ObservableObject {
         cleanupObserver()
         avPlayer?.pause()
         avPlayer = nil
+        boundLayer?.player = nil
         isPlaying = false
+        currentTime = 0
+        duration = 0
     }
 
     private func cleanupObserver() {
         if let timeObserver {
             NotificationCenter.default.removeObserver(timeObserver)
             self.timeObserver = nil
+        }
+        if let tickObserver {
+            avPlayer?.removeTimeObserver(tickObserver)
+            self.tickObserver = nil
         }
     }
 }
